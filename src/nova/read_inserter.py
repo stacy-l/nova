@@ -176,7 +176,7 @@ class ReadInserter:
             seq_record = SeqRecord(
                 Seq(modified_sequence),
                 id=modified_read_name,
-                description=f"Modified with {insertion_seq.insertion_type} insertion at pos {insertion_pos}"
+                description=""
             )
             modified_sequences.append(seq_record)
         
@@ -282,7 +282,7 @@ class ReadInserter:
             seq_record = SeqRecord(
                 Seq(modified_sequence),
                 id=modified_read_name,
-                description=f"Modified with {insertion_seq.insertion_type} insertion at pos {insertion_pos}"
+                description=""
             )
             
             successful_insertions += 1
