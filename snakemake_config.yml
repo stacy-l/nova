@@ -6,8 +6,8 @@ reference_genome: "reference.fasta"      # Path to reference genome FASTA
 variant_config: "variant_config.json"       # Path to variant config
 
 # Output settings
-output_dir: "results"
-output_prefix: "output/nova"
+output_dir: "output"
+output_prefix: "nova"
 
 # Read selection parameters
 random_seed: 42                  # Random seed for subsampling

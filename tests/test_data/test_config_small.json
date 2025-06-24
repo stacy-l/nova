@@ -1,0 +1,23 @@
+{
+  "random": {
+    "n": 5,
+    "length": 50,
+    "gc_content": 0.5
+  },
+  "simple": {
+    "n": 5,
+    "repeat": "CAG",
+    "units": 20
+  },
+  "predefined": {
+    "Alu": {
+      "fasta": "tests/test_data/test_sequences.fasta",
+      "spec": {
+        "AluYa5": 10,
+        "AluYb8": 5,
+        "L1HS_5end": 2,
+        "L1HS_3end": 2
+      }
+    }
+  }
+}

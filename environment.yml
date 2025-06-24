@@ -12,6 +12,6 @@ dependencies:
   - click>=8.0.0
   - samtools>=1.15
   - bcftools>=1.15
-  - minimap2
+  - minimap2>=2.26
   - pytest>=6.0.0
   - pytest-cov>=2.12.0
