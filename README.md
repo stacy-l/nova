@@ -24,8 +24,9 @@ nova simulate input.bam config.json -o output_dir
 
 ### Configuration File
 
-Create a JSON configuration file specifying the types and numbers of variants to simulate:
+Create a JSON configuration file specifying the types and numbers of variants to simulate.
 
+#### Single Entry Format (Original)
 ```json
 {
   "random": {
@@ -49,6 +50,87 @@ Create a JSON configuration file specifying the types and numbers of variants to
   }
 }
 ```
+
+#### Multiple Entry Format (New)
+You can now specify multiple configurations for the same generator type to create more diverse simulations:
+
+```json
+{
+  "random": [
+    {
+      "n": 50,
+      "length": 100,
+      "gc_content": 0.4
+    },
+    {
+      "n": 50,
+      "length": 200,
+      "gc_content": 0.6
+    },
+    {
+      "n": 50,
+      "length": 300
+    }
+  ],
+  "simple": [
+    {
+      "n": 100,
+      "repeat": "CAG",
+      "units": 20
+    },
+    {
+      "n": 100,
+      "repeat": "GC", 
+      "units": 10
+    }
+  ],
+  "predefined": [
+    {
+      "Alu": {
+        "fasta": "dfam_AluY_homininae.fasta",
+        "spec": {
+          "AluYa5": 30,
+          "AluYb8": 20
+        }
+      }
+    },
+    {
+      "L1": {
+        "fasta": "dfam_L1_elements.fasta",
+        "spec": {
+          "L1HS": 15,
+          "L1PA2": 10
+        }
+      }
+    }
+  ]
+}
+```
+
+This example generates:
+- 50 random sequences of 100bp with 40% GC content
+- 50 random sequences of 200bp with 60% GC content  
+- 50 random sequences of 300bp with default GC content
+- 100 CAG repeat sequences (20 units each)
+- 100 GC repeat sequences (10 units each)
+- 30 AluYa5 + 20 AluYb8 sequences from Alu FASTA
+- 15 L1HS + 10 L1PA2 sequences from L1 FASTA
+
+#### Configuration Options
+
+**Random sequences:**
+- `n`: Number of sequences to generate
+- `length`: Length of each sequence
+- `gc_content`: Target GC content (0.0-1.0, optional)
+
+**Simple repeats:**
+- `n`: Number of sequences to generate
+- `repeat`: Repeat unit sequence (e.g., "CAG", "GC")
+- `units`: Number of repeat units
+
+**Predefined sequences:**
+- `fasta`: Path to FASTA file containing sequences
+- `spec`: Dictionary mapping sequence names to counts
 
 ### Command Line Options
 

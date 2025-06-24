@@ -1,16 +1,24 @@
 {
-  "random": {
+  "random": [{
     "n": 200,
     "length": 100,
     "gc_content": 0.5
   },
-  "simple": {
+  {
+    "n": 200,
+    "length": 200,
+    "gc_content": 0.5
+  }
+  ],
+  "simple": [
+    {
     "n": 200,
     "repeat": "CAG",
     "units": 20
-  },
-  "predefined": {
-    "Alu": {
+  }
+  ],
+  "predefined": [
+    {"Alu": {
       "fasta": "predefined/dfam_AluY_homininae.fasta",
       "spec": {
         "AluYa5": 100,
@@ -21,5 +29,12 @@
         "AluYk12": 30
       }
     }
-  }
+  },
+  {"L1HS": {
+    "fasta": "predefined/dfam_L1HS_homininae.fasta",
+    "spec": {"L1HS-5end": 30, 
+    "L1HS-3end": 30,
+    "L1HS_full": 40}
+  }}
+]
 }
