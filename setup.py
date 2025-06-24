@@ -4,6 +4,7 @@ setup(
     name="nova",
     version="0.1.0",
     description="De novo variant insertion simulator for testing structural variant detection",
+    long_description="Requires external bioinformatics tools: samtools, bedtools, bcftools, minimap2 (install via conda environment.yml)",
     author="voidshapes",
     packages=find_packages(where="src"),
     package_dir={"": "src"},

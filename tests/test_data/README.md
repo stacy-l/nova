@@ -73,6 +73,20 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+### Verify Test Environment Setup
+
+To verify your test environment is ready:
+
+```bash
+# Activate test environment
+source nova-test-env/bin/activate
+
+# Verify nova is installed and working
+nova --help
+
+# Should show nova commands: simulate, validate-config
+```
+
 ### Running Tests
 
 ```bash
@@ -91,3 +105,17 @@ python -m pytest tests/test_integration.py
 # Run with coverage
 python -m pytest tests/ --cov=nova
 ```
+
+### Real Data Integration Tests
+
+When `test_reads.bam` is available, the integration test suite includes three real data tests:
+
+1. **Small-scale test** (`test_full_pipeline_with_real_bam`): 20 variants/reads
+2. **Medium-scale test** (`test_medium_scale_real_bam_pipeline`): 100 variants/reads using window-limited sampling
+3. **Large-scale test** (`test_large_scale_proportional_sampling`): 500 reads using proportional sampling
+
+These tests validate that:
+- Both sampling strategies (window-limited < 500, proportional ≥ 500) work with real genomic data
+- The system scales properly from small simulations to larger ones
+- Mock testing constructs accurately represent real BAM file behavior
+- Chromosome-proportional distribution works correctly across multiple chromosomes
