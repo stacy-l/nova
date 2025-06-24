@@ -1,0 +1,25 @@
+{
+  "random": {
+    "n": 200,
+    "length": 100,
+    "gc_content": 0.5
+  },
+  "simple": {
+    "n": 200,
+    "repeat": "CAG",
+    "units": 20
+  },
+  "predefined": {
+    "Alu": {
+      "fasta": "predefined/dfam_AluY_homininae.fasta",
+      "spec": {
+        "AluYa5": 100,
+        "AluYb8": 60,
+        "AluYa8": 50,
+        "AluYb9": 30,
+        "AluYk11": 30,
+        "AluYk12": 30
+      }
+    }
+  }
+}
