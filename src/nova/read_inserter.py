@@ -88,7 +88,7 @@ class ReadInserter:
         Returns:
             Modified read name
         """
-        return f"{insertion_id}_{base_read_name}"
+        return f"{insertion_id}.{base_read_name}"
     
     def _insert_sequence_into_read(self, read_sequence: str, 
                                  insertion_sequence: str, 

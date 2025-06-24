@@ -53,7 +53,7 @@ class VariantRegistry:
         """
         content = f"{sequence}_{insertion_type}_{time.time_ns()}"
         hash_obj = hashlib.sha256(content.encode())
-        return f"{insertion_type}_{hash_obj.hexdigest()[:12]}"
+        return f"nova_{insertion_type}_{hash_obj.hexdigest()[:12]}"
     
     def add_sequence(self, sequence: str, insertion_type: str, 
                     metadata: Optional[Dict[str, Any]] = None) -> str:

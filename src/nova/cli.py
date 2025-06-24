@@ -47,15 +47,15 @@ def cli(ctx, verbose):
 @click.option('--output-prefix', '-p', default='nova_sim',
               help='Prefix for output files')
 @click.option('--min-mapq', default=20, type=int,
-              help='Minimum mapping quality')
+              help='Minimum mapping quality (default: 20)')
 @click.option('--max-soft-clip-ratio', default=0.1, type=float,
-              help='Maximum soft clipping ratio')
+              help='Maximum soft clipping ratio (default: 0.1)')
 @click.option('--min-read-length', default=10000, type=int,
-              help='Minimum read length')
+              help='Minimum read length (default: 10000)')
 @click.option('--max-read-length', default=20000, type=int,
-              help='Maximum read length')
+              help='Maximum read length (default: 20000)')
 @click.option('--min-distance-from-ends', default=1000, type=int,
-              help='Minimum distance from read ends for insertion')
+              help='Minimum distance from read ends for insertion (default: 1000)')
 @click.option('--random-seed', type=int,
               help='Random seed for reproducibility')
 @click.pass_context

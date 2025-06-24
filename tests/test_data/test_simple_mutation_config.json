@@ -1,0 +1,29 @@
+{
+  "random": [
+    {
+      "n": 10,
+      "length": 50,
+      "gc_content": 0.5,
+      "mutations": {
+        "substitution_rate": 0.02
+      }
+    },
+    {
+      "n": 10,
+      "length": 100,
+      "mutations": {
+        "substitution_rate": 0.05
+      }
+    }
+  ],
+  "simple": [
+    {
+      "n": 5,
+      "repeat": "CAG",
+      "units": 10,
+      "mutations": {
+        "substitution_rate": 0.03
+      }
+    }
+  ]
+}

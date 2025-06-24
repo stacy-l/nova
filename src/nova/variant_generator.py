@@ -4,12 +4,31 @@ Variant generator module for creating insertion sequences.
 
 import random
 import string
-from typing import List, Dict, Any, Optional
+import hashlib
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
 from Bio import SeqIO
 from Bio.Seq import Seq
 import logging
 
 from .variant_registry import VariantRegistry
+
+
+@dataclass
+class MutationRecord:
+    """Record of a single mutation applied to a sequence."""
+    position: int
+    original_base: str
+    mutated_base: str
+
+
+@dataclass
+class MutationMetadata:
+    """Metadata about mutations applied to a sequence."""
+    substitution_rate: float
+    mutations_applied: List[MutationRecord]
+    mutation_seed: int
+    total_mutations: int
 
 
 class VariantGenerator:
@@ -26,6 +45,7 @@ class VariantGenerator:
             random_seed: Optional seed for reproducible random generation
         """
         self.registry = registry
+        self.random_seed = random_seed
         self.logger = logging.getLogger(__name__)
         
         if random_seed is not None:
@@ -46,8 +66,146 @@ class VariantGenerator:
         else:
             return [config_item]
     
+    def _generate_mutation_seed(self, base_seed: Optional[int], sequence_index: int) -> int:
+        """
+        Generate a deterministic mutation seed for a specific sequence.
+        
+        Args:
+            base_seed: Base random seed from generator
+            sequence_index: Index of the sequence being mutated
+            
+        Returns:
+            Deterministic mutation seed for this sequence
+        """
+        if base_seed is None:
+            base_seed = 42  # Default fallback
+        
+        # Create deterministic but unique seed for each sequence
+        seed_string = f"{base_seed}_{sequence_index}_mutation"
+        seed_hash = hashlib.md5(seed_string.encode()).hexdigest()
+        return int(seed_hash[:8], 16)  # Use first 8 hex chars as seed
+    
+    def _apply_mutations(self, sequence: str, mutation_config: Dict[str, Any], 
+                        sequence_index: int) -> Tuple[str, MutationMetadata]:
+        """
+        Apply mutations to a sequence based on configuration.
+        
+        Args:
+            sequence: Original sequence to mutate
+            mutation_config: Dictionary containing mutation parameters
+            sequence_index: Index of this sequence for deterministic seeding
+            
+        Returns:
+            Tuple of (mutated_sequence, mutation_metadata)
+        """
+        if not mutation_config or 'substitution_rate' not in mutation_config:
+            # No mutations configured
+            empty_metadata = MutationMetadata(
+                substitution_rate=0.0,
+                mutations_applied=[],
+                mutation_seed=0,
+                total_mutations=0
+            )
+            return sequence, empty_metadata
+        
+        substitution_rate = mutation_config['substitution_rate']
+        
+        if substitution_rate <= 0:
+            # No mutations to apply
+            empty_metadata = MutationMetadata(
+                substitution_rate=substitution_rate,
+                mutations_applied=[],
+                mutation_seed=0,
+                total_mutations=0
+            )
+            return sequence, empty_metadata
+        
+        # Generate mutation seed and create local random state
+        mutation_seed = self._generate_mutation_seed(self.random_seed, sequence_index)
+        mutation_random = random.Random(mutation_seed)
+        
+        # Calculate number of positions to mutate
+        num_mutations = max(1, int(len(sequence) * substitution_rate))
+        
+        if num_mutations >= len(sequence):
+            num_mutations = len(sequence) - 1  # Don't mutate entire sequence
+        
+        # Select random positions to mutate (without replacement)
+        positions_to_mutate = mutation_random.sample(range(len(sequence)), num_mutations)
+        
+        # Convert sequence to list for easy mutation
+        mutated_sequence = list(sequence)
+        mutations_applied = []
+        
+        # Define nucleotide alternatives
+        nucleotide_alternatives = {
+            'A': ['T', 'G', 'C'],
+            'T': ['A', 'G', 'C'],
+            'G': ['A', 'T', 'C'],
+            'C': ['A', 'T', 'G']
+        }
+        
+        # Apply mutations
+        for pos in positions_to_mutate:
+            original_base = sequence[pos].upper()
+            
+            if original_base in nucleotide_alternatives:
+                # Choose random alternative base
+                alternatives = nucleotide_alternatives[original_base]
+                mutated_base = mutation_random.choice(alternatives)
+                
+                # Apply mutation
+                mutated_sequence[pos] = mutated_base
+                
+                # Record mutation
+                mutation_record = MutationRecord(
+                    position=pos,
+                    original_base=original_base,
+                    mutated_base=mutated_base
+                )
+                mutations_applied.append(mutation_record)
+        
+        # Create metadata
+        metadata = MutationMetadata(
+            substitution_rate=substitution_rate,
+            mutations_applied=mutations_applied,
+            mutation_seed=mutation_seed,
+            total_mutations=len(mutations_applied)
+        )
+        
+        return ''.join(mutated_sequence), metadata
+    
+    def _validate_mutation_config(self, mutation_config: Dict[str, Any], prefix: str) -> List[str]:
+        """
+        Validate mutation configuration parameters.
+        
+        Args:
+            mutation_config: Dictionary containing mutation parameters
+            prefix: Prefix for error messages
+            
+        Returns:
+            List of validation error messages
+        """
+        errors = []
+        
+        if not isinstance(mutation_config, dict):
+            errors.append(f"{prefix}mutations config must be a dictionary")
+            return errors
+        
+        if 'substitution_rate' in mutation_config:
+            sub_rate = mutation_config['substitution_rate']
+            if not isinstance(sub_rate, (int, float)):
+                errors.append(f"{prefix}substitution_rate must be a number")
+            elif not 0 <= sub_rate <= 1:
+                errors.append(f"{prefix}substitution_rate must be between 0 and 1")
+        
+        # Add validation for future mutation types here
+        
+        return errors
+    
     def generate_random_insertions(self, n: int, length: int, 
-                                 gc_content: Optional[float] = None) -> List[str]:
+                                 gc_content: Optional[float] = None,
+                                 mutation_config: Optional[Dict[str, Any]] = None) -> List[str]:
         """
         Generate random insertion sequences.
         
@@ -55,6 +213,7 @@ class VariantGenerator:
             n: Number of variants to generate
             length: Length of each insertion
             gc_content: Target GC content (0.0-1.0). If None, uses equal probabilities.
+            mutation_config: Optional mutation configuration
             
         Returns:
             List of insertion IDs
@@ -72,20 +231,44 @@ class VariantGenerator:
         for i in range(n):
             sequence = ''.join(random.choices(nucleotides, weights=weights, k=length))
             
+            # Apply mutations if configured
+            if mutation_config:
+                sequence, mutation_metadata = self._apply_mutations(sequence, mutation_config, i)
+            else:
+                mutation_metadata = None
+            
             metadata = {
                 'generation_method': 'random',
                 'target_gc_content': gc_content,
                 'actual_gc_content': (sequence.count('G') + sequence.count('C')) / len(sequence)
             }
             
+            # Add mutation metadata if mutations were applied
+            if mutation_metadata:
+                metadata['mutations'] = {
+                    'substitution_rate': mutation_metadata.substitution_rate,
+                    'total_mutations': mutation_metadata.total_mutations,
+                    'mutation_seed': mutation_metadata.mutation_seed,
+                    'mutation_records': [
+                        {
+                            'position': record.position,
+                            'original_base': record.original_base,
+                            'mutated_base': record.mutated_base
+                        }
+                        for record in mutation_metadata.mutations_applied
+                    ]
+                }
+            
             insertion_id = self.registry.add_sequence(sequence, 'random', metadata)
             insertion_ids.append(insertion_id)
         
-        self.logger.info(f"Generated {n} random insertions of length {length}")
+        mutation_text = f" with mutations" if mutation_config else ""
+        self.logger.info(f"Generated {n} random insertions of length {length}{mutation_text}")
         return insertion_ids
     
     def generate_simple_repeat_insertions(self, n: int, repeat_unit: str, 
-                                        units: int) -> List[str]:
+                                        units: int,
+                                        mutation_config: Optional[Dict[str, Any]] = None) -> List[str]:
         """
         Generate simple repeat insertion sequences.
         
@@ -93,14 +276,23 @@ class VariantGenerator:
             n: Number of variants to generate
             repeat_unit: Repeat unit sequence (e.g., 'CAG')
             units: Number of repeat units
+            mutation_config: Optional mutation configuration
             
         Returns:
             List of insertion IDs
         """
         insertion_ids = []
-        sequence = repeat_unit * units
+        base_sequence = repeat_unit * units
         
         for i in range(n):
+            sequence = base_sequence
+            
+            # Apply mutations if configured
+            if mutation_config:
+                sequence, mutation_metadata = self._apply_mutations(sequence, mutation_config, i)
+            else:
+                mutation_metadata = None
+            
             metadata = {
                 'generation_method': 'simple_repeat',
                 'repeat_unit': repeat_unit,
@@ -108,14 +300,32 @@ class VariantGenerator:
                 'unit_length': len(repeat_unit)
             }
             
+            # Add mutation metadata if mutations were applied
+            if mutation_metadata:
+                metadata['mutations'] = {
+                    'substitution_rate': mutation_metadata.substitution_rate,
+                    'total_mutations': mutation_metadata.total_mutations,
+                    'mutation_seed': mutation_metadata.mutation_seed,
+                    'mutation_records': [
+                        {
+                            'position': record.position,
+                            'original_base': record.original_base,
+                            'mutated_base': record.mutated_base
+                        }
+                        for record in mutation_metadata.mutations_applied
+                    ]
+                }
+            
             insertion_id = self.registry.add_sequence(sequence, 'simple', metadata)
             insertion_ids.append(insertion_id)
         
-        self.logger.info(f"Generated {n} simple repeat insertions: {repeat_unit} x {units}")
+        mutation_text = f" with mutations" if mutation_config else ""
+        self.logger.info(f"Generated {n} simple repeat insertions: {repeat_unit} x {units}{mutation_text}")
         return insertion_ids
     
     def generate_predefined_insertions(self, fasta_path: str, 
-                                     sequence_counts: Dict[str, int]) -> List[str]:
+                                     sequence_counts: Dict[str, int],
+                                     mutation_config: Optional[Dict[str, Any]] = None) -> List[str]:
         """
         Generate predefined insertion sequences from FASTA file.
         
@@ -123,6 +333,7 @@ class VariantGenerator:
             fasta_path: Path to FASTA file containing predefined sequences
             sequence_counts: Dictionary mapping sequence names to counts
                            e.g., {'AluYa5': 30, 'AluYb8': 20}
+            mutation_config: Optional mutation configuration
         
         Returns:
             List of insertion IDs
@@ -137,14 +348,24 @@ class VariantGenerator:
             self.logger.error(f"Failed to read FASTA file {fasta_path}: {e}")
             raise
         
+        sequence_index = 0  # Global index for mutation seeding
+        
         for seq_name, count in sequence_counts.items():
             if seq_name not in sequences:
                 self.logger.warning(f"Sequence '{seq_name}' not found in {fasta_path}")
                 continue
             
-            sequence = sequences[seq_name]
+            base_sequence = sequences[seq_name]
             
             for i in range(count):
+                sequence = base_sequence
+                
+                # Apply mutations if configured
+                if mutation_config:
+                    sequence, mutation_metadata = self._apply_mutations(sequence, mutation_config, sequence_index)
+                else:
+                    mutation_metadata = None
+                
                 metadata = {
                     'generation_method': 'predefined',
                     'source_file': fasta_path,
@@ -152,11 +373,29 @@ class VariantGenerator:
                     'copy_number': i + 1
                 }
                 
+                # Add mutation metadata if mutations were applied
+                if mutation_metadata:
+                    metadata['mutations'] = {
+                        'substitution_rate': mutation_metadata.substitution_rate,
+                        'total_mutations': mutation_metadata.total_mutations,
+                        'mutation_seed': mutation_metadata.mutation_seed,
+                        'mutation_records': [
+                            {
+                                'position': record.position,
+                                'original_base': record.original_base,
+                                'mutated_base': record.mutated_base
+                            }
+                            for record in mutation_metadata.mutations_applied
+                        ]
+                    }
+                
                 insertion_id = self.registry.add_sequence(sequence, seq_name, metadata)
                 insertion_ids.append(insertion_id)
+                sequence_index += 1  # Increment for next sequence
         
         total_generated = sum(sequence_counts.values())
-        self.logger.info(f"Generated {total_generated} predefined insertions from {fasta_path}")
+        mutation_text = f" with mutations" if mutation_config else ""
+        self.logger.info(f"Generated {total_generated} predefined insertions from {fasta_path}{mutation_text}")
         return insertion_ids
     
     def generate_from_config(self, config: Dict[str, Any]) -> List[str]:
@@ -194,8 +433,9 @@ class VariantGenerator:
                 n = random_config['n']
                 length = random_config['length']
                 gc_content = random_config.get('gc_content')
+                mutation_config = random_config.get('mutations')
                 
-                ids = self.generate_random_insertions(n, length, gc_content)
+                ids = self.generate_random_insertions(n, length, gc_content, mutation_config)
                 all_insertion_ids.extend(ids)
         
         if 'simple' in config:
@@ -204,8 +444,9 @@ class VariantGenerator:
                 n = simple_config['n']
                 repeat_unit = simple_config['repeat']
                 units = simple_config['units']
+                mutation_config = simple_config.get('mutations')
                 
-                ids = self.generate_simple_repeat_insertions(n, repeat_unit, units)
+                ids = self.generate_simple_repeat_insertions(n, repeat_unit, units, mutation_config)
                 all_insertion_ids.extend(ids)
         
         if 'predefined' in config:
@@ -214,8 +455,9 @@ class VariantGenerator:
                 for pred_type, type_config in pred_config.items():
                     fasta_path = type_config['fasta']
                     sequence_counts = type_config['spec']
+                    mutation_config = type_config.get('mutations')
                     
-                    ids = self.generate_predefined_insertions(fasta_path, sequence_counts)
+                    ids = self.generate_predefined_insertions(fasta_path, sequence_counts, mutation_config)
                     all_insertion_ids.extend(ids)
         
         self.logger.info(f"Generated total of {len(all_insertion_ids)} insertion sequences")
@@ -256,6 +498,11 @@ class VariantGenerator:
                     gc = random_config['gc_content']
                     if not 0 <= gc <= 1:
                         errors.append(f"{prefix}'gc_content' must be between 0 and 1")
+                
+                # Validate mutations config if present
+                if 'mutations' in random_config:
+                    mutation_errors = self._validate_mutation_config(random_config['mutations'], prefix)
+                    errors.extend(mutation_errors)
         
         if 'simple' in config:
             simple_configs = self._normalize_to_list(config['simple'])
@@ -274,6 +521,11 @@ class VariantGenerator:
                     errors.append(f"{prefix}'units' must be positive")
                 if not simple_config.get('repeat', ''):
                     errors.append(f"{prefix}'repeat' cannot be empty")
+                
+                # Validate mutations config if present
+                if 'mutations' in simple_config:
+                    mutation_errors = self._validate_mutation_config(simple_config['mutations'], prefix)
+                    errors.extend(mutation_errors)
         
         if 'predefined' in config:
             predefined_configs = self._normalize_to_list(config['predefined'])
@@ -289,5 +541,10 @@ class VariantGenerator:
                         errors.append(f"{prefix}'{pred_type}' missing 'fasta' or 'spec' fields")
                     if not isinstance(type_config.get('spec', {}), dict):
                         errors.append(f"{prefix}'{pred_type}' 'spec' must be a dictionary")
+                    
+                    # Validate mutations config if present
+                    if 'mutations' in type_config:
+                        mutation_errors = self._validate_mutation_config(type_config['mutations'], f"{prefix}'{pred_type}' ")
+                        errors.extend(mutation_errors)
         
         return errors

@@ -9,7 +9,7 @@ Nova simulates de novo variant insertions in long-read sequencing data to test t
 ## Installation
 
 ```bash
-conda env create --file environment.yml
+conda env create -f environment.yml --subdir osx-64
 conda activate nova
 uv pip install -e .
 ```
@@ -131,6 +131,57 @@ This example generates:
 **Predefined sequences:**
 - `fasta`: Path to FASTA file containing sequences
 - `spec`: Dictionary mapping sequence names to counts
+
+**Mutations (optional for all types):**
+- `mutations.substitution_rate`: Rate of point mutations (0.0-1.0, e.g., 0.02 = 2% divergence)
+
+#### Mutation Feature
+
+Nova supports applying point mutations to generated sequences to simulate sequence divergence. Mutations are applied after sequence generation but before insertion into reads, with each copy receiving different mutations for realistic diversity.
+
+**Example with mutations:**
+```json
+{
+  "random": [
+    {
+      "n": 100,
+      "length": 300,
+      "gc_content": 0.4,
+      "mutations": {
+        "substitution_rate": 0.02
+      }
+    }
+  ],
+  "simple": [
+    {
+      "n": 50,
+      "repeat": "CAG",
+      "units": 20,
+      "mutations": {
+        "substitution_rate": 0.015
+      }
+    }
+  ],
+  "predefined": [
+    {
+      "Alu": {
+        "fasta": "alu_sequences.fasta",
+        "spec": {"AluYa5": 30},
+        "mutations": {
+          "substitution_rate": 0.01
+        }
+      }
+    }
+  ]
+}
+```
+
+**Mutation Features:**
+- **Deterministic but diverse**: Each sequence copy gets different mutations using deterministic seeding
+- **Equal substitution probability**: Each base mutates to any of the other 3 bases with equal probability
+- **Detailed tracking**: All mutations are recorded with positions and base changes in output metadata
+- **Configurable per generator**: Different mutation rates for random, simple, and predefined sequences
+- **Backwards compatible**: Mutations are optional; existing configs work unchanged
 
 ### Command Line Options
 
