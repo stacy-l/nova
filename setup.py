@@ -14,6 +14,12 @@ setup(
         "biopython>=1.79",
         "click>=8.0.0",
     ],
+    extras_require={
+        "test": [
+            "pytest>=6.0.0",
+            "pytest-cov>=2.12.0",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "nova=nova.cli:main",

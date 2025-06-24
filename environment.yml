@@ -13,3 +13,5 @@ dependencies:
   - samtools>=1.15
   - bcftools>=1.15
   - minimap2
+  - pytest>=6.0.0
+  - pytest-cov>=2.12.0

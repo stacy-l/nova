@@ -104,11 +104,41 @@ Nova generates several output files:
 
 ## Testing
 
-Run the test suite:
+### Setup Test Environment
+
+Tests use pytest and require a Python virtual environment:
 
 ```bash
-python -m pytest nova/tests/
+# Using uv (recommended)
+uv venv nova-test-env
+source nova-test-env/bin/activate
+uv pip install -r requirements.txt
+uv pip install -e .
+
+# Or using pip
+python -m venv nova-test-env
+source nova-test-env/bin/activate
+pip install -r requirements.txt
+pip install -e .
 ```
+
+### Run the Test Suite
+
+```bash
+# Activate your virtual environment first
+source nova-test-env/bin/activate
+
+# Run all tests
+python -m pytest tests/ -v
+
+# Run with coverage
+python -m pytest tests/ --cov=nova
+
+# Run specific test modules
+python -m pytest tests/test_variant_generator.py
+```
+
+Most tests use mocks and don't require real BAM files. See `tests/test_data/README.md` for information about providing BAM files for full integration testing.
 
 ## Example Workflow
 

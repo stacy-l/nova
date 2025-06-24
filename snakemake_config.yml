@@ -11,7 +11,7 @@ output_prefix: "output/nova"
 
 # Read selection parameters
 random_seed: 42                  # Random seed for subsampling
-subsample_fraction: 0.0005       # Fraction of reads to subsample (0.0-1.0)
+subsample_fraction: 0.001       # Fraction of reads to subsample (0.0-1.0)
 min_mapq: 20                     # Minimum mapping quality
 max_soft_clip_ratio: 0.1         # Maximum soft clipping ratio
 min_read_length: 10000           # Minimum read length

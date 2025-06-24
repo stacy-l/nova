@@ -61,14 +61,14 @@ Tests use pytest and require a Python virtual environment. You can set this up u
 
 ```bash
 # Using uv (recommended)
-uv venv test-env
-source test-env/bin/activate
+uv venv nova-test-env
+source nova-test-env/bin/activate
 uv pip install -r requirements.txt
 uv pip install -e .
 
 # Or using pip
-python -m venv test-env
-source test-env/bin/activate
+python -m venv nova-test-env
+source nova-test-env/bin/activate
 pip install -r requirements.txt
 pip install -e .
 ```
@@ -77,7 +77,7 @@ pip install -e .
 
 ```bash
 # Activate your virtual environment first
-source test-env/bin/activate
+source nova-test-env/bin/activate
 
 # Run all tests (most use mocks, don't require BAM files)
 python -m pytest tests/ -v
