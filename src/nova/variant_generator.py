@@ -31,6 +31,21 @@ class VariantGenerator:
         if random_seed is not None:
             random.seed(random_seed)
     
+    def _normalize_to_list(self, config_item: Any) -> List[Any]:
+        """
+        Normalize configuration item to a list format.
+        
+        Args:
+            config_item: Either a single config object or a list of config objects
+            
+        Returns:
+            List of configuration objects
+        """
+        if isinstance(config_item, list):
+            return config_item
+        else:
+            return [config_item]
+    
     def generate_random_insertions(self, n: int, length: int, 
                                  gc_content: Optional[float] = None) -> List[str]:
         """
@@ -150,17 +165,22 @@ class VariantGenerator:
         
         Args:
             config: Variant configuration dictionary specifying the number of variants to generate for each type
-                   Example:
+                   Example (single entry format):
                    {
                        'random': {'n': 50, 'length': 100},
-                       'simple': {'n': 50, 'repeat': 'CAG', 'units': 40},
-                       'predefined': {
-                           'Alu': {
-                               'fasta': 'predefined/dfam_AluY_homininae.fasta',
-                               'n': 50,
-                               'spec': {'AluYa5': 30, 'AluYb8': 20}
-                           }
-                       }
+                       'simple': {'n': 50, 'repeat': 'CAG', 'units': 40}
+                   }
+                   
+                   Example (multiple entries format):
+                   {
+                       'random': [
+                           {'n': 50, 'length': 100, 'gc_content': 0.4},
+                           {'n': 50, 'length': 200}
+                       ],
+                       'simple': [
+                           {'n': 100, 'repeat': 'CAG', 'units': 20},
+                           {'n': 100, 'repeat': 'GC', 'units': 10}
+                       ]
                    }
         
         Returns:
@@ -169,30 +189,34 @@ class VariantGenerator:
         all_insertion_ids = []
         
         if 'random' in config:
-            random_config = config['random']
-            n = random_config['n']
-            length = random_config['length']
-            gc_content = random_config.get('gc_content')
-            
-            ids = self.generate_random_insertions(n, length, gc_content)
-            all_insertion_ids.extend(ids)
+            random_configs = self._normalize_to_list(config['random'])
+            for random_config in random_configs:
+                n = random_config['n']
+                length = random_config['length']
+                gc_content = random_config.get('gc_content')
+                
+                ids = self.generate_random_insertions(n, length, gc_content)
+                all_insertion_ids.extend(ids)
         
         if 'simple' in config:
-            simple_config = config['simple']
-            n = simple_config['n']
-            repeat_unit = simple_config['repeat']
-            units = simple_config['units']
-            
-            ids = self.generate_simple_repeat_insertions(n, repeat_unit, units)
-            all_insertion_ids.extend(ids)
+            simple_configs = self._normalize_to_list(config['simple'])
+            for simple_config in simple_configs:
+                n = simple_config['n']
+                repeat_unit = simple_config['repeat']
+                units = simple_config['units']
+                
+                ids = self.generate_simple_repeat_insertions(n, repeat_unit, units)
+                all_insertion_ids.extend(ids)
         
         if 'predefined' in config:
-            for pred_type, pred_config in config['predefined'].items():
-                fasta_path = pred_config['fasta']
-                sequence_counts = pred_config['spec']
-                
-                ids = self.generate_predefined_insertions(fasta_path, sequence_counts)
-                all_insertion_ids.extend(ids)
+            predefined_configs = self._normalize_to_list(config['predefined'])
+            for pred_config in predefined_configs:
+                for pred_type, type_config in pred_config.items():
+                    fasta_path = type_config['fasta']
+                    sequence_counts = type_config['spec']
+                    
+                    ids = self.generate_predefined_insertions(fasta_path, sequence_counts)
+                    all_insertion_ids.extend(ids)
         
         self.logger.info(f"Generated total of {len(all_insertion_ids)} insertion sequences")
         return all_insertion_ids
@@ -214,35 +238,56 @@ class VariantGenerator:
             return errors
         
         if 'random' in config:
-            random_config = config['random']
-            if 'n' not in random_config or 'length' not in random_config:
-                errors.append("Random config missing required 'n' or 'length' fields")
-            if random_config.get('n', 0) <= 0:
-                errors.append("Random 'n' must be positive")
-            if random_config.get('length', 0) <= 0:
-                errors.append("Random 'length' must be positive")
-            if 'gc_content' in random_config:
-                gc = random_config['gc_content']
-                if not 0 <= gc <= 1:
-                    errors.append("Random 'gc_content' must be between 0 and 1")
+            random_configs = self._normalize_to_list(config['random'])
+            for i, random_config in enumerate(random_configs):
+                prefix = f"Random config {i+1}: " if len(random_configs) > 1 else "Random config: "
+                
+                if not isinstance(random_config, dict):
+                    errors.append(f"{prefix}must be a dictionary")
+                    continue
+                
+                if 'n' not in random_config or 'length' not in random_config:
+                    errors.append(f"{prefix}missing required 'n' or 'length' fields")
+                if random_config.get('n', 0) <= 0:
+                    errors.append(f"{prefix}'n' must be positive")
+                if random_config.get('length', 0) <= 0:
+                    errors.append(f"{prefix}'length' must be positive")
+                if 'gc_content' in random_config:
+                    gc = random_config['gc_content']
+                    if not 0 <= gc <= 1:
+                        errors.append(f"{prefix}'gc_content' must be between 0 and 1")
         
         if 'simple' in config:
-            simple_config = config['simple']
-            if 'n' not in simple_config or 'repeat' not in simple_config or 'units' not in simple_config:
-                errors.append("Simple config missing required 'n', 'repeat', or 'units' fields")
-            if simple_config.get('n', 0) <= 0:
-                errors.append("Simple 'n' must be positive")
-            if simple_config.get('units', 0) <= 0:
-                errors.append("Simple 'units' must be positive")
-            if not simple_config.get('repeat', ''):
-                errors.append("Simple 'repeat' cannot be empty")
+            simple_configs = self._normalize_to_list(config['simple'])
+            for i, simple_config in enumerate(simple_configs):
+                prefix = f"Simple config {i+1}: " if len(simple_configs) > 1 else "Simple config: "
+                
+                if not isinstance(simple_config, dict):
+                    errors.append(f"{prefix}must be a dictionary")
+                    continue
+                
+                if 'n' not in simple_config or 'repeat' not in simple_config or 'units' not in simple_config:
+                    errors.append(f"{prefix}missing required 'n', 'repeat', or 'units' fields")
+                if simple_config.get('n', 0) <= 0:
+                    errors.append(f"{prefix}'n' must be positive")
+                if simple_config.get('units', 0) <= 0:
+                    errors.append(f"{prefix}'units' must be positive")
+                if not simple_config.get('repeat', ''):
+                    errors.append(f"{prefix}'repeat' cannot be empty")
         
         if 'predefined' in config:
-            pred_config = config['predefined']
-            for pred_type, type_config in pred_config.items():
-                if 'fasta' not in type_config or 'spec' not in type_config:
-                    errors.append(f"Predefined '{pred_type}' missing 'fasta' or 'spec' fields")
-                if not isinstance(type_config.get('spec', {}), dict):
-                    errors.append(f"Predefined '{pred_type}' 'spec' must be a dictionary")
+            predefined_configs = self._normalize_to_list(config['predefined'])
+            for i, pred_config in enumerate(predefined_configs):
+                prefix = f"Predefined config {i+1}: " if len(predefined_configs) > 1 else "Predefined config: "
+                
+                if not isinstance(pred_config, dict):
+                    errors.append(f"{prefix}must be a dictionary")
+                    continue
+                
+                for pred_type, type_config in pred_config.items():
+                    if 'fasta' not in type_config or 'spec' not in type_config:
+                        errors.append(f"{prefix}'{pred_type}' missing 'fasta' or 'spec' fields")
+                    if not isinstance(type_config.get('spec', {}), dict):
+                        errors.append(f"{prefix}'{pred_type}' 'spec' must be a dictionary")
         
         return errors

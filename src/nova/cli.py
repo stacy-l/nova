@@ -64,9 +64,15 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
              min_distance_from_ends, random_seed):
     """
     Run de novo variant insertion simulation.
-    
-    BAM_FILE: Path to input BAM file
-    CONFIG_FILE: Path to JSON configuration file
+    Produces four output files:
+    - *_insertions.json: Insertion records
+    - *_modified_reads.fasta: Modified reads
+    - *_registry.json: Sequence registry
+    - *_statistics.json: Simulation statistics
+
+    Positional arguments:
+    bam_file: Path to input BAM file
+    config_file: Path to JSON configuration file (determines variants to simulate)
     """
     logger = logging.getLogger(__name__)
     
@@ -185,13 +191,22 @@ def validate_config(config_file):
         else:
             logger.info("Configuration is valid")
             total_variants = 0
+            
             if 'random' in config:
-                total_variants += config['random']['n']
+                random_configs = generator._normalize_to_list(config['random'])
+                for random_config in random_configs:
+                    total_variants += random_config['n']
+            
             if 'simple' in config:
-                total_variants += config['simple']['n']
+                simple_configs = generator._normalize_to_list(config['simple'])
+                for simple_config in simple_configs:
+                    total_variants += simple_config['n']
+            
             if 'predefined' in config:
-                for pred_config in config['predefined'].values():
-                    total_variants += sum(pred_config['spec'].values())
+                predefined_configs = generator._normalize_to_list(config['predefined'])
+                for pred_config in predefined_configs:
+                    for type_config in pred_config.values():
+                        total_variants += sum(type_config['spec'].values())
             
             logger.info(f"Configuration would generate {total_variants} total variants")
             

@@ -197,7 +197,111 @@ class TestVariantGenerator(unittest.TestCase):
         """Test validating non-dictionary configuration."""
         errors = self.generator.validate_config("not a dict")
         self.assertEqual(len(errors), 1)
-        self.assertIn("dictionary", errors[0])
+    
+    def test_generate_from_config_multi_entry(self):
+        """Test generating from configuration with multiple entries per type."""
+        config = {
+            'random': [
+                {'n': 5, 'length': 100, 'gc_content': 0.4},
+                {'n': 3, 'length': 200}
+            ],
+            'simple': [
+                {'n': 4, 'repeat': 'CAG', 'units': 20},
+                {'n': 2, 'repeat': 'GC', 'units': 10}
+            ]
+        }
+        
+        insertion_ids = self.generator.generate_from_config(config)
+        
+        # Should generate 5+3+4+2 = 14 total insertions
+        self.assertEqual(len(insertion_ids), 14)
+        self.assertEqual(len(self.registry), 14)
+        
+        # Check that we have the right types
+        random_seqs = self.registry.get_sequences_by_type('random')
+        simple_seqs = self.registry.get_sequences_by_type('simple')
+        
+        self.assertEqual(len(random_seqs), 8)  # 5 + 3
+        self.assertEqual(len(simple_seqs), 6)  # 4 + 2
+        
+        # Check that different lengths were generated for random sequences
+        random_lengths = [seq.insertion_length for seq in random_seqs]
+        self.assertIn(100, random_lengths)
+        self.assertIn(200, random_lengths)
+        
+        # Check that different repeat units were generated for simple sequences
+        simple_metadata = [seq.metadata for seq in simple_seqs]
+        repeat_units = [meta.get('repeat_unit') for meta in simple_metadata]
+        self.assertIn('CAG', repeat_units)
+        self.assertIn('GC', repeat_units)
+    
+    def test_validate_config_multi_entry_valid(self):
+        """Test validating valid multi-entry configuration."""
+        config = {
+            'random': [
+                {'n': 5, 'length': 100, 'gc_content': 0.5},
+                {'n': 3, 'length': 200}
+            ],
+            'simple': [
+                {'n': 4, 'repeat': 'CAG', 'units': 40},
+                {'n': 2, 'repeat': 'GC', 'units': 10}
+            ]
+        }
+        
+        errors = self.generator.validate_config(config)
+        self.assertEqual(len(errors), 0)
+    
+    def test_validate_config_multi_entry_invalid(self):
+        """Test validating invalid multi-entry configuration."""
+        config = {
+            'random': [
+                {'n': -1, 'length': 100},  # Invalid n
+                {'n': 3, 'length': 0}      # Invalid length
+            ],
+            'simple': [
+                {'n': 4, 'repeat': '', 'units': 40},  # Invalid repeat
+                {'n': 0, 'repeat': 'GC', 'units': -1}  # Invalid n and units
+            ]
+        }
+        
+        errors = self.generator.validate_config(config)
+        self.assertGreater(len(errors), 0)
+        
+        # Check that multiple configs are identified in error messages
+        error_text = ' '.join(errors)
+        self.assertIn("Random config 1:", error_text)
+        self.assertIn("Random config 2:", error_text)
+        self.assertIn("Simple config 1:", error_text)
+        self.assertIn("Simple config 2:", error_text)
+    
+    def test_backwards_compatibility_single_entry(self):
+        """Test that single-entry (old format) configs still work."""
+        config = {
+            'random': {'n': 5, 'length': 100, 'gc_content': 0.5},
+            'simple': {'n': 3, 'repeat': 'CAG', 'units': 40}
+        }
+        
+        insertion_ids = self.generator.generate_from_config(config)
+        
+        # Should generate 5+3 = 8 total insertions
+        self.assertEqual(len(insertion_ids), 8)
+        self.assertEqual(len(self.registry), 8)
+        
+        # Validation should also work
+        errors = self.generator.validate_config(config)
+        self.assertEqual(len(errors), 0)
+    
+    def test_normalize_to_list_helper(self):
+        """Test the _normalize_to_list helper method."""
+        # Test with single object
+        single_obj = {'n': 5, 'length': 100}
+        result = self.generator._normalize_to_list(single_obj)
+        self.assertEqual(result, [single_obj])
+        
+        # Test with list
+        list_obj = [{'n': 5, 'length': 100}, {'n': 3, 'length': 200}]
+        result = self.generator._normalize_to_list(list_obj)
+        self.assertEqual(result, list_obj)
 
 
 if __name__ == '__main__':

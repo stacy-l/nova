@@ -122,12 +122,10 @@ def analyze_sequence_recovery(ground_truth_fasta: str, detected_fasta: str) -> D
     ground_truth_hashes = extract_sequence_content_hashes(ground_truth_fasta)
     detected_hashes = extract_sequence_content_hashes(detected_fasta)
     
-    # Calculate confusion matrix components
     true_positives = len(ground_truth_hashes & detected_hashes)
     false_negatives = len(ground_truth_hashes - detected_hashes)
     false_positives = len(detected_hashes - ground_truth_hashes)
     
-    # Calculate performance metrics
     total_ground_truth = len(ground_truth_hashes)
     total_detected = len(detected_hashes)
     
@@ -177,7 +175,6 @@ def compare_multiple_fasta_files(fasta_paths: List[str], labels: Optional[List[s
     if len(labels) != len(fasta_paths):
         raise ValueError("Number of labels must match number of FASTA files")
     
-    # Extract hashes for each file
     all_hashes = []
     file_info = []
     
@@ -190,16 +187,13 @@ def compare_multiple_fasta_files(fasta_paths: List[str], labels: Optional[List[s
             'sequence_count': len(hashes)
         })
     
-    # Calculate sequences common to all files
     common_to_all = set.intersection(*all_hashes) if all_hashes else set()
     
-    # Calculate unique sequences for each file
     unique_sequences = {}
     for i, (label, hashes) in enumerate(zip(labels, all_hashes)):
         other_hashes = set.union(*(all_hashes[:i] + all_hashes[i+1:]))
         unique_sequences[label] = len(hashes - other_hashes)
     
-    # Perform pairwise comparisons
     pairwise_comparisons = {}
     overlap_matrix = [[0.0 for _ in range(len(fasta_paths))] for _ in range(len(fasta_paths))]
     
@@ -255,7 +249,6 @@ def get_sequence_statistics(fasta_path: str) -> Dict[str, Any]:
             sequence_str = str(record.seq).upper()
             lengths.append(len(sequence_str))
             
-            # Track unique sequences
             sequence_hash = hashlib.sha256(sequence_str.encode()).hexdigest()
             if sequence_hash in seen_sequences:
                 duplicates += 1
