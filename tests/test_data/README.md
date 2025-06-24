@@ -1,6 +1,6 @@
 # Test Data Directory
 
-This directory contains test files for Nova's test suite.
+This directory contains test files for `nova`'s test suite.
 
 ## Provided Files
 
@@ -12,7 +12,7 @@ This directory contains test files for Nova's test suite.
 For complete integration testing, you'll need to provide the following files:
 
 ### BAM Files
-Nova requires BAM files for read selection testing. You'll need to provide:
+`nova` requires BAM files for read selection testing. You'll need to provide:
 
 1. **test_reads.bam** - A sample BAM file containing long reads (PacBio/Oxford Nanopore)
    - Reads should be between 10-20kb in length
@@ -57,7 +57,7 @@ When running tests that require these files, place them as:
 
 ### Setup Test Environment
 
-Tests use pytest and require a Python virtual environment. You can set this up using `uv` or `pip`:
+Tests use pytest and require a Python virtual environment. If `nova-test-env` is not in the working directory, you can set this up using `uv` or `pip`:
 
 ```bash
 # Using uv (recommended)
@@ -78,21 +78,22 @@ pip install -e .
 To verify your test environment is ready:
 
 ```bash
-# Activate test environment
-source nova-test-env/bin/activate
-
-# Verify nova is installed and working
+# Check if nova-test-env venv is active: if so, this will print a help message
 nova --help
 
+# Activate venv if nova is not found
+source nova-test-env/bin/activate
+
+# Check that venv is active again
 # Should show nova commands: simulate, validate-config
+nova --help
+
 ```
 
 ### Running Tests
 
+Tests can only be run after verifying that the environment is active.
 ```bash
-# Activate your virtual environment first
-source nova-test-env/bin/activate
-
 # Run all tests (most use mocks, don't require BAM files)
 python -m pytest tests/ -v
 

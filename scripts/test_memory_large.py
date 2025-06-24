@@ -14,12 +14,13 @@ from pathlib import Path
 from typing import Dict, Any
 
 # Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from nova.variant_registry import VariantRegistry
 from nova.variant_generator import VariantGenerator
 from nova.read_selector import ReadSelector
 from nova.read_inserter import ReadInserter
+from nova.sequence_utils import compare_fasta_content
 
 
 def get_memory_usage() -> Dict[str, float]:
@@ -39,7 +40,6 @@ def print_memory_stats(stage: str, memory_stats: Dict[str, float]):
     print(f"{stage:.<40} RSS: {memory_stats['rss_mb']:>7.1f} MB | "
           f"VMS: {memory_stats['vms_mb']:>7.1f} MB | "
           f"System: {memory_stats['system_used_gb']:>6.1f} GB")
-
 
 def run_memory_optimized_simulation(bam_file: str, config_file: str, output_dir: Path) -> Dict[str, Any]:
     """Run simulation using memory-optimized methods with memory tracking."""
@@ -238,7 +238,7 @@ def main():
     print("Nova Large-Scale Memory Usage Measurement Script")
     print("=" * 60)
     
-    # Configuration - using large config with 500 variants
+    # Uses test files in tests/test_data
     bam_file = 'tests/test_data/test_reads.bam'
     config_file = 'tests/test_data/test_config_large.json'
     output_dir = Path('test_output')
@@ -306,6 +306,46 @@ def main():
     print(f"  Memory-optimized: {memory_optimized_results['successful_insertions']} successful insertions")
     print(f"  Traditional: {traditional_results['successful_insertions']} successful insertions")
     
+    # Verify sequence content equivalence
+    print(f"\nSequence Content Verification:")
+    memory_optimized_fasta = output_dir / "nova_large_modified_reads.fasta"
+    traditional_fasta = output_dir / "nova_large_traditional_modified_reads.fasta"
+    
+    if memory_optimized_fasta.exists() and traditional_fasta.exists():
+        try:
+            comparison_info = compare_fasta_content(
+                str(memory_optimized_fasta), str(traditional_fasta)
+            )
+            
+            print(f"  Memory-optimized FASTA: {comparison_info['file1_sequences']} unique sequences")
+            print(f"  Traditional FASTA: {comparison_info['file2_sequences']} unique sequences")
+            print(f"  Common sequences: {comparison_info['common_sequences']}")
+            print(f"  Unique to memory-optimized: {comparison_info['unique_to_file1']}")
+            print(f"  Unique to traditional: {comparison_info['unique_to_file2']}")
+            print(f"  Overlap percentage: {comparison_info['overlap_percentage']:.1f}%")
+            
+            if comparison_info['sequences_identical']:
+                print("  ✓ PASS: Sequence content is identical between methods")
+            else:
+                print("  ✗ FAIL: Sequence content differs between methods")
+            
+        except Exception as e:
+            print(f"  Warning: Could not compare sequence content: {e}")
+    else:
+        print("  Warning: FASTA files not found for comparison")
+    
+    # Prepare comparison results for saving
+    comparison_results = {
+        'rss_savings_percent': rss_savings,
+        'vms_savings_percent': vms_savings,
+        'system_savings_percent': system_savings,
+        'performance_ratio': performance_ratio
+    }
+    
+    # Add sequence comparison results if available
+    if 'comparison_info' in locals():
+        comparison_results['sequence_content_comparison'] = comparison_info
+    
     # Save detailed results
     results_file = output_dir / "memory_large_comparison_results.json"
     with open(results_file, 'w') as f:
@@ -313,12 +353,7 @@ def main():
             'scale': '500_variants',
             'memory_optimized': memory_optimized_results,
             'traditional': traditional_results,
-            'comparison': {
-                'rss_savings_percent': rss_savings,
-                'vms_savings_percent': vms_savings,
-                'system_savings_percent': system_savings,
-                'performance_ratio': performance_ratio
-            }
+            'comparison': comparison_results
         }, f, indent=2)
     
     print(f"\nDetailed results saved to: {results_file}")

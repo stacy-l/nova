@@ -195,3 +195,7 @@ cython_debug/
 
 # Misc
 .DS_Store
+
+# Bioinformatics
+*.bam
+*.bai
