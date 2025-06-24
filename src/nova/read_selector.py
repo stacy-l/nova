@@ -21,6 +21,43 @@ class ReadMetadata:
     soft_clip_ratio: float
 
 
+@dataclass
+class LazyReadReference:
+    """Lazy reference to a read that can fetch sequence on-demand."""
+    bam_path: str
+    read_name: str
+    original_chr: str
+    original_pos: int
+    read_length: int
+    mapq: int
+    gc_content: float
+    soft_clip_ratio: float
+    
+    def get_metadata(self) -> ReadMetadata:
+        """Get ReadMetadata for this read."""
+        return ReadMetadata(
+            read_name=self.read_name,
+            original_chr=self.original_chr,
+            original_pos=self.original_pos,
+            read_length=self.read_length,
+            mapq=self.mapq,
+            gc_content=self.gc_content,
+            soft_clip_ratio=self.soft_clip_ratio
+        )
+    
+    def get_sequence(self) -> Optional[str]:
+        """Fetch the actual read sequence from BAM file on-demand."""
+        try:
+            with pysam.AlignmentFile(self.bam_path, "rb") as bam:
+                # Search for the read by name and position
+                for read in bam.fetch(self.original_chr, self.original_pos, self.original_pos + 1):
+                    if read.query_name == self.read_name and read.reference_start == self.original_pos:
+                        return read.query_sequence
+        except Exception:
+            pass
+        return None
+
+
 class ReadSelector:
     """
     Select appropriate reads for insertion based on filtering criteria.
@@ -255,6 +292,89 @@ class ReadSelector:
             self.logger.debug(f"Selected {len(chrom_reads)} reads from {chrom} (target: {target_reads})")
         
         return selected_reads
+    
+    def _select_lazy_reads_with_proportional_sampling(self, bam: pysam.AlignmentFile, n_reads: int) -> List[LazyReadReference]:
+        """
+        Select reads using chromosome-proportional sampling, returning lazy references.
+        
+        Args:
+            bam: Open BAM file handle
+            n_reads: Number of reads to select
+            
+        Returns:
+            List of LazyReadReference objects
+        """
+        selected_reads = []
+        chromosome_targets = self._get_chromosome_proportional_targets(bam, n_reads)
+        
+        self.logger.info(f"Using proportional sampling for {n_reads} reads across {len(chromosome_targets)} chromosomes")
+        
+        for chrom, target_reads in chromosome_targets.items():
+            if target_reads == 0:
+                continue
+                
+            # Get sampling regions for this chromosome
+            chrom_length = bam.get_reference_length(chrom)
+            if chrom_length is None:
+                continue
+                
+            # Create windows for this chromosome
+            window_size = 1000000
+            num_windows = max(1, chrom_length // window_size)
+            
+            chrom_regions = []
+            for i in range(num_windows):
+                start = random.randint(0, max(0, chrom_length - window_size))
+                end = min(start + window_size, chrom_length)
+                chrom_regions.append((chrom, start, end))
+            
+            # Shuffle regions for this chromosome
+            random.shuffle(chrom_regions)
+            
+            # Collect reads from this chromosome
+            chrom_reads = []
+            regions_tried = 0
+            max_regions_to_try = len(chrom_regions) * 2
+            
+            region_idx = 0
+            while len(chrom_reads) < target_reads and regions_tried < max_regions_to_try:
+                if region_idx >= len(chrom_regions):
+                    random.shuffle(chrom_regions)
+                    region_idx = 0
+                
+                _, start, end = chrom_regions[region_idx]
+                regions_tried += 1
+                region_idx += 1
+                
+                try:
+                    for read in bam.fetch(chrom, start, end):
+                        if len(chrom_reads) >= target_reads:
+                            break
+                        
+                        if not self._passes_filters(read):
+                            continue
+                        
+                        lazy_ref = LazyReadReference(
+                            bam_path=self.bam_path,
+                            read_name=read.query_name,
+                            original_chr=read.reference_name,
+                            original_pos=read.reference_start,
+                            read_length=read.query_length,
+                            mapq=read.mapping_quality,
+                            gc_content=self._calculate_gc_content(read.query_sequence),
+                            soft_clip_ratio=self._calculate_soft_clip_ratio(read)
+                        )
+                        
+                        chrom_reads.append(lazy_ref)
+                        
+                except Exception as e:
+                    self.logger.warning(f"Skipping region {chrom}:{start}-{end} due to error: {e}")
+                    continue
+            
+            selected_reads.extend(chrom_reads)
+            self.logger.debug(f"Selected {len(chrom_reads)} reads from {chrom} (target: {target_reads})")
+        
+        return selected_reads
 
     def _select_reads_with_window_limits(self, bam: pysam.AlignmentFile, n_reads: int) -> List[Tuple[pysam.AlignedSegment, ReadMetadata]]:
         """
@@ -320,6 +440,71 @@ class ReadSelector:
         
         return selected_reads
     
+    def _select_lazy_reads_with_window_limits(self, bam: pysam.AlignmentFile, n_reads: int) -> List[LazyReadReference]:
+        """
+        Select reads using window-limited sampling, returning lazy references.
+        
+        Args:
+            bam: Open BAM file handle
+            n_reads: Number of reads to select
+            
+        Returns:
+            List of LazyReadReference objects
+        """
+        selected_reads = []
+        
+        # Get all sampling regions and shuffle upfront
+        sampling_regions = self._get_chromosome_sampling_regions(bam)
+        random.shuffle(sampling_regions)
+        
+        # Limit reads per window to ensure better distribution
+        max_reads_per_window = max(1, n_reads // 10)  # Max 10% of reads per window
+        
+        self.logger.info(f"Using window-limited sampling for {n_reads} reads (max {max_reads_per_window} per window)")
+        
+        regions_tried = 0
+        max_regions_to_try = len(sampling_regions) * 3
+        
+        region_idx = 0
+        while len(selected_reads) < n_reads and regions_tried < max_regions_to_try:
+            if region_idx >= len(sampling_regions):
+                # Reshuffle and restart if we've gone through all regions
+                random.shuffle(sampling_regions)
+                region_idx = 0
+            
+            chrom, start, end = sampling_regions[region_idx]
+            regions_tried += 1
+            region_idx += 1
+            
+            try:
+                window_reads = 0
+                for read in bam.fetch(chrom, start, end):
+                    if len(selected_reads) >= n_reads or window_reads >= max_reads_per_window:
+                        break
+                    
+                    if not self._passes_filters(read):
+                        continue
+                    
+                    lazy_ref = LazyReadReference(
+                        bam_path=self.bam_path,
+                        read_name=read.query_name,
+                        original_chr=read.reference_name,
+                        original_pos=read.reference_start,
+                        read_length=read.query_length,
+                        mapq=read.mapping_quality,
+                        gc_content=self._calculate_gc_content(read.query_sequence),
+                        soft_clip_ratio=self._calculate_soft_clip_ratio(read)
+                    )
+                    
+                    selected_reads.append(lazy_ref)
+                    window_reads += 1
+                    
+            except Exception as e:
+                self.logger.warning(f"Skipping region {chrom}:{start}-{end} due to error: {e}")
+                continue
+        
+        return selected_reads
+    
     def select_reads(self, n_reads: int) -> List[Tuple[pysam.AlignedSegment, ReadMetadata]]:
         """
         Select reads from BAM file using hybrid sampling strategy.
@@ -346,6 +531,42 @@ class ReadSelector:
             chrom_counts = {}
             for _, metadata in selected_reads:
                 chrom = metadata.original_chr
+                chrom_counts[chrom] = chrom_counts.get(chrom, 0) + 1
+            
+            self.logger.info(f"Selected {len(selected_reads)} reads from {self.bam_path} "
+                           f"using {strategy} sampling across {len(chrom_counts)} chromosomes")
+            
+            if len(chrom_counts) > 0:
+                self.logger.debug(f"Chromosome distribution: {dict(sorted(chrom_counts.items()))}")
+            
+            return selected_reads
+    
+    def select_lazy_reads(self, n_reads: int) -> List[LazyReadReference]:
+        """
+        Select reads from BAM file using hybrid sampling strategy, returning lazy references.
+        
+        For small simulations (< 500 reads): Uses window-limited sampling with better distribution
+        For large simulations (≥ 500 reads): Uses chromosome-proportional sampling
+        
+        Args:
+            n_reads: Number of reads to select
+            
+        Returns:
+            List of LazyReadReference objects
+        """
+        with pysam.AlignmentFile(self.bam_path, "rb") as bam:
+            # Choose sampling strategy based on simulation size
+            if n_reads < 500:
+                selected_reads = self._select_lazy_reads_with_window_limits(bam, n_reads)
+                strategy = "window-limited"
+            else:
+                selected_reads = self._select_lazy_reads_with_proportional_sampling(bam, n_reads)
+                strategy = "chromosome-proportional"
+            
+            # Calculate chromosome distribution for logging
+            chrom_counts = {}
+            for lazy_ref in selected_reads:
+                chrom = lazy_ref.original_chr
                 chrom_counts[chrom] = chrom_counts.get(chrom, 0) + 1
             
             self.logger.info(f"Selected {len(selected_reads)} reads from {self.bam_path} "

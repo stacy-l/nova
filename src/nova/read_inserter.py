@@ -13,7 +13,7 @@ from Bio.Seq import Seq
 import logging
 
 from .variant_registry import VariantRegistry, InsertionSequence
-from .read_selector import ReadMetadata
+from .read_selector import ReadMetadata, LazyReadReference
 
 
 @dataclass
@@ -204,6 +204,103 @@ class ReadInserter:
         
         return insertion_records, modified_sequences, skip_stats
     
+    def insert_streaming_mode(self, lazy_reads: List[LazyReadReference], 
+                            insertion_ids: List[str]):
+        """
+        Insert sequences into reads using streaming mode to minimize memory usage.
+        
+        Args:
+            lazy_reads: List of LazyReadReference objects
+            insertion_ids: List of insertion IDs to use
+            
+        Yields:
+            Tuple of (InsertionRecord, SeqRecord) for each successful insertion
+        """
+        if len(lazy_reads) != len(insertion_ids):
+            raise ValueError(f"Number of reads ({len(lazy_reads)}) must match "
+                           f"number of insertions ({len(insertion_ids)})")
+        
+        skipped_missing_sequences = []
+        skipped_infeasible_reads = []
+        successful_insertions = 0
+        total_attempted = len(lazy_reads)
+        
+        for lazy_read, insertion_id in zip(lazy_reads, insertion_ids):
+            insertion_seq = self.registry.get_sequence(insertion_id)
+            if insertion_seq is None:
+                self.logger.error(f"Insertion sequence {insertion_id} not found in registry")
+                skipped_missing_sequences.append(insertion_id)
+                continue
+            
+            insertion_pos = self._get_valid_insertion_position(
+                lazy_read.read_length, insertion_seq.insertion_length
+            )
+            
+            if insertion_pos is None:
+                self.logger.warning(f"Skipping read {lazy_read.read_name}: no valid insertion position "
+                                  f"(read_length={lazy_read.read_length}, insertion_length={insertion_seq.insertion_length}, "
+                                  f"min_distance_required={self.min_distance_from_ends * 2})")
+                skipped_infeasible_reads.append({
+                    'base_read_name': lazy_read.read_name,
+                    'read_length': lazy_read.read_length,
+                    'insertion_length': insertion_seq.insertion_length,
+                    'insertion_id': insertion_id
+                })
+                continue
+            
+            # Fetch the sequence on-demand
+            original_sequence = lazy_read.get_sequence()
+            if original_sequence is None:
+                self.logger.warning(f"Could not fetch sequence for read {lazy_read.read_name}")
+                skipped_infeasible_reads.append({
+                    'base_read_name': lazy_read.read_name,
+                    'read_length': lazy_read.read_length,
+                    'insertion_length': insertion_seq.insertion_length,
+                    'insertion_id': insertion_id,
+                    'reason': 'sequence_fetch_failed'
+                })
+                continue
+            
+            base_read_name = lazy_read.read_name
+            modified_read_name = self._generate_modified_read_name(insertion_id, base_read_name)
+            
+            modified_sequence = self._insert_sequence_into_read(
+                original_sequence, insertion_seq.sequence, insertion_pos
+            )
+            
+            insertion_record = InsertionRecord(
+                base_read_name=base_read_name,
+                modified_read_name=modified_read_name,
+                original_chr=lazy_read.original_chr,
+                original_pos=lazy_read.original_pos,
+                insertion_id=insertion_id,
+                insertion_type=insertion_seq.insertion_type,
+                insertion_length=insertion_seq.insertion_length,
+                insertion_pos=insertion_pos
+            )
+            
+            seq_record = SeqRecord(
+                Seq(modified_sequence),
+                id=modified_read_name,
+                description=f"Modified with {insertion_seq.insertion_type} insertion at pos {insertion_pos}"
+            )
+            
+            successful_insertions += 1
+            yield insertion_record, seq_record
+        
+        # Log final statistics
+        success_rate = successful_insertions / total_attempted if total_attempted > 0 else 0
+        
+        self.logger.info(f"Streaming insertion summary: {successful_insertions}/{total_attempted} successful "
+                        f"({success_rate:.2%} success rate)")
+        
+        if skipped_missing_sequences:
+            self.logger.warning(f"Skipped {len(skipped_missing_sequences)} pairs due to missing sequences: "
+                              f"{', '.join(set(skipped_missing_sequences))}")
+        
+        if skipped_infeasible_reads:
+            self.logger.warning(f"Skipped {len(skipped_infeasible_reads)} pairs due to insufficient space or fetch failures")
+    
     def save_insertion_records(self, insertion_records: List[InsertionRecord], 
                              output_path: str) -> None:
         """
@@ -233,6 +330,64 @@ class ReadInserter:
             SeqIO.write(modified_sequences, f, "fasta")
         
         self.logger.info(f"Saved {len(modified_sequences)} modified sequences to {output_path}")
+    
+    def save_streaming_results(self, lazy_reads: List[LazyReadReference], 
+                             insertion_ids: List[str],
+                             output_prefix: str) -> Dict[str, Any]:
+        """
+        Process insertions in streaming mode and save results directly to files.
+        
+        Args:
+            lazy_reads: List of LazyReadReference objects
+            insertion_ids: List of insertion IDs to use
+            output_prefix: Prefix for output files
+            
+        Returns:
+            Dictionary with statistics and file paths
+        """
+        records_file = f"{output_prefix}_insertions.json"
+        sequences_file = f"{output_prefix}_modified_reads.fasta"
+        
+        insertion_records = []
+        sequences_written = 0
+        
+        # Open files for streaming write
+        with open(records_file, 'w') as records_f, open(sequences_file, 'w') as sequences_f:
+            records_f.write('[\n')  # Start JSON array
+            first_record = True
+            
+            for insertion_record, seq_record in self.insert_streaming_mode(lazy_reads, insertion_ids):
+                # Write insertion record to JSON (streaming)
+                if not first_record:
+                    records_f.write(',\n')
+                else:
+                    first_record = False
+                
+                json.dump(insertion_record.to_dict(), records_f, indent=2)
+                insertion_records.append(insertion_record)  # Keep for statistics
+                
+                # Write sequence record to FASTA (streaming)
+                SeqIO.write([seq_record], sequences_f, "fasta")
+                sequences_written += 1
+            
+            records_f.write('\n]')  # Close JSON array
+        
+        # Calculate and log statistics
+        stats = {
+            'total_insertions': len(insertion_records),
+            'sequences_written': sequences_written,
+            'records_file': records_file,
+            'sequences_file': sequences_file
+        }
+        
+        if insertion_records:
+            detailed_stats = self.get_insertion_statistics(insertion_records)
+            stats.update(detailed_stats)
+        
+        self.logger.info(f"Streaming results saved: {len(insertion_records)} records to {records_file}, "
+                        f"{sequences_written} sequences to {sequences_file}")
+        
+        return stats
     
     def get_insertion_statistics(self, insertion_records: List[InsertionRecord]) -> Dict[str, Any]:
         """
