@@ -182,6 +182,184 @@ class TestReadSelector(unittest.TestCase):
             self.assertIsInstance(metadata.mapq, int)
             self.assertIsInstance(metadata.gc_content, float)
             self.assertIsInstance(metadata.soft_clip_ratio, float)
+    
+    @patch('pysam.AlignmentFile')
+    def test_get_chromosome_proportional_targets(self, mock_alignment_file):
+        """Test chromosome-proportional target calculation."""
+        # Setup mock BAM file
+        mock_bam = Mock()
+        mock_alignment_file.return_value.__enter__.return_value = mock_bam
+        
+        # Mock index statistics for multiple chromosomes
+        mock_stat1 = Mock()
+        mock_stat1.contig = "chr1"
+        mock_stat2 = Mock()
+        mock_stat2.contig = "chr2"
+        mock_stat3 = Mock()
+        mock_stat3.contig = "chr3"
+        
+        mock_bam.get_index_statistics.return_value = [mock_stat1, mock_stat2, mock_stat3]
+        
+        # Mock chromosome lengths: chr1=100M, chr2=50M, chr3=25M (total=175M)
+        def mock_get_reference_length(chrom):
+            lengths = {"chr1": 100000000, "chr2": 50000000, "chr3": 25000000}
+            return lengths.get(chrom)
+        
+        mock_bam.get_reference_length.side_effect = mock_get_reference_length
+        
+        # Test with 1000 reads
+        targets = self.selector._get_chromosome_proportional_targets(mock_bam, 1000)
+        
+        # Should allocate proportionally: chr1=571, chr2=286, chr3=143 (approximately)
+        self.assertEqual(len(targets), 3)
+        self.assertIn("chr1", targets)
+        self.assertIn("chr2", targets)
+        self.assertIn("chr3", targets)
+        
+        # chr1 should get the most reads (largest chromosome)
+        self.assertGreater(targets["chr1"], targets["chr2"])
+        self.assertGreater(targets["chr2"], targets["chr3"])
+        
+        # Total should equal requested reads
+        self.assertEqual(sum(targets.values()), 1000)
+    
+    @patch('pysam.AlignmentFile')
+    def test_small_vs_large_simulation_strategies(self, mock_alignment_file):
+        """Test that different strategies are used for small vs large simulations."""
+        # Setup mock BAM file
+        mock_bam = Mock()
+        mock_alignment_file.return_value.__enter__.return_value = mock_bam
+        
+        # Mock index statistics
+        mock_stat = Mock()
+        mock_stat.contig = "chr1"
+        mock_bam.get_index_statistics.return_value = [mock_stat]
+        mock_bam.get_reference_length.return_value = 1000000
+        
+        # Create mock reads
+        mock_reads = []
+        for i in range(20):
+            mock_read = Mock()
+            mock_read.is_secondary = False
+            mock_read.is_supplementary = False
+            mock_read.is_unmapped = False
+            mock_read.mapping_quality = 30
+            mock_read.query_length = 15000
+            mock_read.query_name = f"read_{i}"
+            mock_read.reference_name = "chr1"
+            mock_read.reference_start = i * 1000
+            mock_read.query_sequence = "A" * 15000
+            mock_read.cigartuples = [(0, 15000)]
+            mock_reads.append(mock_read)
+        
+        mock_bam.fetch.return_value = iter(mock_reads)
+        
+        # Test small simulation (should use window-limited)
+        with self.assertLogs('nova.read_selector', level='INFO') as log:
+            selected_reads = self.selector.select_reads(50)  # < 500
+            self.assertIn('window-limited', ''.join(log.output))
+        
+        # Test large simulation (should use proportional)
+        with self.assertLogs('nova.read_selector', level='INFO') as log:
+            selected_reads = self.selector.select_reads(500)  # >= 500
+            self.assertIn('proportional', ''.join(log.output))
+    
+    @patch('pysam.AlignmentFile')
+    def test_genomic_distribution_window_limits(self, mock_alignment_file):
+        """Test that window-limited sampling improves genomic distribution."""
+        # Setup mock BAM file with multiple chromosomes
+        mock_bam = Mock()
+        mock_alignment_file.return_value.__enter__.return_value = mock_bam
+        
+        # Mock index statistics for 3 chromosomes
+        mock_stats = []
+        for i in range(1, 4):
+            mock_stat = Mock()
+            mock_stat.contig = f"chr{i}"
+            mock_stats.append(mock_stat)
+        
+        mock_bam.get_index_statistics.return_value = mock_stats
+        mock_bam.get_reference_length.return_value = 1000000
+        
+        # Create reads distributed across chromosomes
+        def mock_fetch(chrom, start, end):
+            # Return different numbers of reads per chromosome/region
+            if chrom == "chr1":
+                return [self._create_mock_read(f"read_{chrom}_{i}", chrom) for i in range(5)]
+            elif chrom == "chr2":
+                return [self._create_mock_read(f"read_{chrom}_{i}", chrom) for i in range(3)]
+            else:  # chr3
+                return [self._create_mock_read(f"read_{chrom}_{i}", chrom) for i in range(2)]
+        
+        mock_bam.fetch.side_effect = mock_fetch
+        
+        # Test window-limited sampling
+        selected_reads = self.selector._select_reads_with_window_limits(mock_bam, 20)
+        
+        # Should have reads from multiple chromosomes
+        chromosomes = set(metadata.original_chr for _, metadata in selected_reads)
+        self.assertGreater(len(chromosomes), 1, "Should sample from multiple chromosomes")
+    
+    @patch('pysam.AlignmentFile')
+    def test_proportional_sampling_distribution(self, mock_alignment_file):
+        """Test that proportional sampling distributes reads correctly."""
+        # Setup mock BAM file
+        mock_bam = Mock()
+        mock_alignment_file.return_value.__enter__.return_value = mock_bam
+        
+        # Mock index statistics for chromosomes of different sizes
+        mock_stats = []
+        for i in range(1, 4):
+            mock_stat = Mock()
+            mock_stat.contig = f"chr{i}"
+            mock_stats.append(mock_stat)
+        
+        mock_bam.get_index_statistics.return_value = mock_stats
+        
+        # Different chromosome lengths
+        def mock_get_reference_length(chrom):
+            lengths = {"chr1": 200000000, "chr2": 100000000, "chr3": 50000000}  # 4:2:1 ratio
+            return lengths.get(chrom)
+        
+        mock_bam.get_reference_length.side_effect = mock_get_reference_length
+        
+        # Create reads for each chromosome
+        def mock_fetch(chrom, start, end):
+            # Return plenty of reads for each chromosome
+            return [self._create_mock_read(f"read_{chrom}_{i}", chrom) for i in range(20)]
+        
+        mock_bam.fetch.side_effect = mock_fetch
+        
+        # Test proportional sampling with 700 reads
+        selected_reads = self.selector._select_reads_with_proportional_sampling(mock_bam, 700)
+        
+        # Count reads per chromosome
+        chrom_counts = {}
+        for _, metadata in selected_reads:
+            chrom = metadata.original_chr
+            chrom_counts[chrom] = chrom_counts.get(chrom, 0) + 1
+        
+        # Should have reads from all chromosomes
+        self.assertEqual(len(chrom_counts), 3)
+        
+        # chr1 should have most reads (largest), chr3 should have least
+        self.assertGreater(chrom_counts.get("chr1", 0), chrom_counts.get("chr2", 0))
+        self.assertGreater(chrom_counts.get("chr2", 0), chrom_counts.get("chr3", 0))
+    
+    def _create_mock_read(self, read_name: str, chrom: str):
+        """Helper to create a mock read that passes filters."""
+        mock_read = Mock()
+        mock_read.is_secondary = False
+        mock_read.is_supplementary = False
+        mock_read.is_unmapped = False
+        mock_read.mapping_quality = 30
+        mock_read.query_length = 15000
+        mock_read.query_name = read_name
+        mock_read.reference_name = chrom
+        mock_read.reference_start = 1000
+        mock_read.query_sequence = "A" * 15000
+        mock_read.cigartuples = [(0, 15000)]
+        return mock_read
 
 
 class TestReadMetadata(unittest.TestCase):
