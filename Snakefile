@@ -93,6 +93,7 @@ rule index_bam:
 rule merge_sim_base_bams:
     input:
         sim_bam = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_modified_reads.bam",
+        sim_index = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_modified_reads.bam.bai",
         base_bam = config["bam_file"]
     output:
         merged_bam = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.bam"
@@ -142,7 +143,8 @@ rule call_variants_base:
 
 use rule call_variants_base as call_variants_sim with:
     input:
-        bam = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.bam"
+        bam = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.bam",
+        index = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.bam.bai"
     output:
         vcf=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz",
         tbi=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz.tbi"
