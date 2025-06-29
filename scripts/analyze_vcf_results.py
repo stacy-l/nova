@@ -17,6 +17,8 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import seaborn as sns
 import subprocess
+import argparse
+import sys
 
 # Try to import pysam, but handle gracefully if it fails
 try:
@@ -482,11 +484,11 @@ def generate_summary_report(nova_variants, categories, type_detection, alignment
         if size_ratios:
             print(f"   Size ratio - Mean: {np.mean(size_ratios):.2f}, Median: {np.median(size_ratios):.2f}")
 
-def save_detailed_results(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, output_file):
+def save_detailed_results(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, output_file, statistics_file):
     """Save comprehensive analysis results to structured JSON."""
     
     # Calculate summary statistics
-    expected_counts = load_expected_counts("output/nova_statistics.json")
+    expected_counts = load_expected_counts(statistics_file)
     
     # Detection rates by type
     detection_rates = {}
@@ -726,12 +728,25 @@ def save_tabular_data(nova_variants, categories, type_detection, alignment_compa
 
 def main():
     """Main analysis function."""
-    # File paths
-    simulation_jl = "output/nova_simulation.jl"
-    insertions_json = "output/nova_insertions.json"
-    output_json = "output/nova_variant_analysis.json"
-    original_bam = "tests/test_data/test_reads.bam"  # From statistics file
-    modified_bam = "output/nova_modified_reads.bam"
+    parser = argparse.ArgumentParser(description='Analyze nova VCF results for variant detection performance')
+    parser.add_argument('output_dir', help='Output directory containing nova simulation results')
+    parser.add_argument('--output-prefix', default='nova', help='Output file prefix (default: nova)')
+    parser.add_argument('--original-bam', default='tests/test_data/test_reads.bam', 
+                       help='Path to original BAM file (default: tests/test_data/test_reads.bam)')
+    
+    args = parser.parse_args()
+    
+    # Construct file paths using provided output directory
+    output_dir = Path(args.output_dir)
+    if not output_dir.exists():
+        print(f"Error: Output directory {output_dir} does not exist")
+        return
+    
+    simulation_jl = output_dir / f"{args.output_prefix}_simulation.jl"
+    insertions_json = output_dir / f"{args.output_prefix}_insertions.json"
+    output_json = output_dir / f"{args.output_prefix}_variant_analysis.json"
+    original_bam = args.original_bam
+    modified_bam = output_dir / f"{args.output_prefix}_modified_reads.bam"
     
     # Check if files exist
     if not Path(simulation_jl).exists():
@@ -768,12 +783,13 @@ def main():
     size_comparisons = compare_insertion_sizes(nova_variants, insertions_json)
     
     # Generate reports
+    statistics_json = output_dir / f"{args.output_prefix}_statistics.json"
     generate_summary_report(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons)
-    save_detailed_results(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, output_json)
+    save_detailed_results(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, str(output_json), str(statistics_json))
     
     # Save tabular data for advanced visualizations
     print("Generating tabular data for visualization...")
-    tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, output_json)
+    tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, str(output_json))
 
 if __name__ == "__main__":
     main()

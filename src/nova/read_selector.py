@@ -64,7 +64,8 @@ class ReadSelector:
     """
     
     def __init__(self, bam_path: str, min_mapq: int = 20, max_soft_clip_ratio: float = 0.1,
-                 min_read_length: int = 10000, max_read_length: int = 20000):
+                 min_read_length: int = 10000, max_read_length: int = 20000, 
+                 max_reads_per_window: int = 1):
         """
         Initialize ReadSelector.
         
@@ -74,12 +75,14 @@ class ReadSelector:
             max_soft_clip_ratio: Maximum soft clipping ratio
             min_read_length: Minimum read length
             max_read_length: Maximum read length
+            max_reads_per_window: Maximum reads per genomic window (default: 1 for de novo simulation)
         """
         self.bam_path = bam_path
         self.min_mapq = min_mapq
         self.max_soft_clip_ratio = max_soft_clip_ratio
         self.min_read_length = min_read_length
         self.max_read_length = max_read_length
+        self.max_reads_per_window = max_reads_per_window
         self.logger = logging.getLogger(__name__)
         
     def _calculate_gc_content(self, sequence: str) -> float:
@@ -210,6 +213,200 @@ class ReadSelector:
                 targets[largest_chroms[i]] += 1
         
         return {k: v for k, v in targets.items() if v > 0}
+
+    def _select_reads_unified(self, bam: pysam.AlignmentFile, n_reads: int) -> List[Tuple[pysam.AlignedSegment, ReadMetadata]]:
+        """
+        Unified read selection method combining proportional allocation with window limits.
+        
+        Uses chromosome-proportional allocation for fair distribution while strictly enforcing
+        max_reads_per_window to prevent genomic clustering that leads to false positives.
+        
+        Args:
+            bam: Open BAM file handle
+            n_reads: Number of reads to select
+            
+        Returns:
+            List of tuples containing (read, metadata)
+        """
+        selected_reads = []
+        
+        # Use proportional allocation across chromosomes
+        chromosome_targets = self._get_chromosome_proportional_targets(bam, n_reads)
+        
+        self.logger.info(f"Using unified sampling for {n_reads} reads across {len(chromosome_targets)} chromosomes "
+                        f"(max {self.max_reads_per_window} reads per window)")
+        
+        for chrom, target_reads in chromosome_targets.items():
+            if target_reads == 0:
+                continue
+                
+            # Get chromosome length for window creation
+            chrom_length = bam.get_reference_length(chrom)
+            if chrom_length is None:
+                continue
+            
+            # Create sampling windows
+            window_size = 1000000  # 1MB windows
+            num_windows_needed = max(1, (target_reads + self.max_reads_per_window - 1) // self.max_reads_per_window)
+            total_possible_windows = max(1, chrom_length // window_size)
+            
+            # Create more windows than we need for better randomization
+            num_windows_to_create = min(total_possible_windows, num_windows_needed * 3)
+            
+            # Generate random windows for this chromosome
+            chrom_windows = []
+            for _ in range(num_windows_to_create):
+                start = random.randint(0, max(0, chrom_length - window_size))
+                end = min(start + window_size, chrom_length)
+                chrom_windows.append((chrom, start, end))
+            
+            # Shuffle windows for random sampling
+            random.shuffle(chrom_windows)
+            
+            # Collect reads from this chromosome
+            chrom_reads = []
+            windows_tried = 0
+            max_windows_to_try = len(chrom_windows) * 2
+            
+            window_idx = 0
+            while len(chrom_reads) < target_reads and windows_tried < max_windows_to_try:
+                if window_idx >= len(chrom_windows):
+                    # Reshuffle and restart if we've tried all windows
+                    random.shuffle(chrom_windows)
+                    window_idx = 0
+                
+                _, start, end = chrom_windows[window_idx]
+                windows_tried += 1
+                window_idx += 1
+                
+                try:
+                    window_reads = 0
+                    for read in bam.fetch(chrom, start, end):
+                        # Stop if we've reached chromosome target or window limit
+                        if len(chrom_reads) >= target_reads or window_reads >= self.max_reads_per_window:
+                            break
+                        
+                        if not self._passes_filters(read):
+                            continue
+                        
+                        metadata = ReadMetadata(
+                            read_name=read.query_name,
+                            original_chr=read.reference_name,
+                            original_pos=read.reference_start,
+                            read_length=read.query_length,
+                            mapq=read.mapping_quality,
+                            gc_content=self._calculate_gc_content(read.query_sequence),
+                            soft_clip_ratio=self._calculate_soft_clip_ratio(read)
+                        )
+                        
+                        chrom_reads.append((read, metadata))
+                        window_reads += 1
+                        
+                except Exception as e:
+                    self.logger.warning(f"Skipping region {chrom}:{start}-{end} due to error: {e}")
+                    continue
+            
+            selected_reads.extend(chrom_reads)
+            self.logger.debug(f"Selected {len(chrom_reads)} reads from {chrom} (target: {target_reads})")
+        
+        self.logger.info(f"Unified sampling completed: {len(selected_reads)} reads selected")
+        return selected_reads
+
+    def _select_lazy_reads_unified(self, bam: pysam.AlignmentFile, n_reads: int) -> List[LazyReadReference]:
+        """
+        Unified read selection method returning lazy references.
+        
+        Args:
+            bam: Open BAM file handle
+            n_reads: Number of reads to select
+            
+        Returns:
+            List of LazyReadReference objects
+        """
+        selected_reads = []
+        
+        # Use proportional allocation across chromosomes
+        chromosome_targets = self._get_chromosome_proportional_targets(bam, n_reads)
+        
+        self.logger.info(f"Using unified sampling for {n_reads} reads across {len(chromosome_targets)} chromosomes "
+                        f"(max {self.max_reads_per_window} reads per window)")
+        
+        for chrom, target_reads in chromosome_targets.items():
+            if target_reads == 0:
+                continue
+                
+            # Get chromosome length for window creation
+            chrom_length = bam.get_reference_length(chrom)
+            if chrom_length is None:
+                continue
+            
+            # Create sampling windows
+            window_size = 1000000  # 1MB windows
+            num_windows_needed = max(1, (target_reads + self.max_reads_per_window - 1) // self.max_reads_per_window)
+            total_possible_windows = max(1, chrom_length // window_size)
+            
+            # Create more windows than we need for better randomization
+            num_windows_to_create = min(total_possible_windows, num_windows_needed * 3)
+            
+            # Generate random windows for this chromosome
+            chrom_windows = []
+            for _ in range(num_windows_to_create):
+                start = random.randint(0, max(0, chrom_length - window_size))
+                end = min(start + window_size, chrom_length)
+                chrom_windows.append((chrom, start, end))
+            
+            # Shuffle windows for random sampling
+            random.shuffle(chrom_windows)
+            
+            # Collect reads from this chromosome
+            chrom_reads = []
+            windows_tried = 0
+            max_windows_to_try = len(chrom_windows) * 2
+            
+            window_idx = 0
+            while len(chrom_reads) < target_reads and windows_tried < max_windows_to_try:
+                if window_idx >= len(chrom_windows):
+                    # Reshuffle and restart if we've tried all windows
+                    random.shuffle(chrom_windows)
+                    window_idx = 0
+                
+                _, start, end = chrom_windows[window_idx]
+                windows_tried += 1
+                window_idx += 1
+                
+                try:
+                    window_reads = 0
+                    for read in bam.fetch(chrom, start, end):
+                        # Stop if we've reached chromosome target or window limit
+                        if len(chrom_reads) >= target_reads or window_reads >= self.max_reads_per_window:
+                            break
+                        
+                        if not self._passes_filters(read):
+                            continue
+                        
+                        lazy_ref = LazyReadReference(
+                            bam_path=self.bam_path,
+                            read_name=read.query_name,
+                            original_chr=read.reference_name,
+                            original_pos=read.reference_start,
+                            read_length=read.query_length,
+                            mapq=read.mapping_quality,
+                            gc_content=self._calculate_gc_content(read.query_sequence),
+                            soft_clip_ratio=self._calculate_soft_clip_ratio(read)
+                        )
+                        
+                        chrom_reads.append(lazy_ref)
+                        window_reads += 1
+                        
+                except Exception as e:
+                    self.logger.warning(f"Skipping region {chrom}:{start}-{end} due to error: {e}")
+                    continue
+            
+            selected_reads.extend(chrom_reads)
+            self.logger.debug(f"Selected {len(chrom_reads)} reads from {chrom} (target: {target_reads})")
+        
+        self.logger.info(f"Unified sampling completed: {len(selected_reads)} reads selected")
+        return selected_reads
 
     def _select_reads_with_proportional_sampling(self, bam: pysam.AlignmentFile, n_reads: int) -> List[Tuple[pysam.AlignedSegment, ReadMetadata]]:
         """
@@ -505,27 +702,34 @@ class ReadSelector:
         
         return selected_reads
     
-    def select_reads(self, n_reads: int) -> List[Tuple[pysam.AlignedSegment, ReadMetadata]]:
+    def select_reads(self, n_reads: int, use_legacy_methods: bool = False) -> List[Tuple[pysam.AlignedSegment, ReadMetadata]]:
         """
-        Select reads from BAM file using hybrid sampling strategy.
+        Select reads from BAM file using unified sampling strategy.
         
-        For small simulations (< 500 reads): Uses window-limited sampling with better distribution
-        For large simulations (≥ 500 reads): Uses chromosome-proportional sampling
+        By default uses the new unified method that combines proportional allocation
+        with strict window limits to prevent false positives. Legacy methods can
+        be used for comparison testing.
         
         Args:
             n_reads: Number of reads to select
+            use_legacy_methods: If True, use original hybrid strategy for comparison
             
         Returns:
             List of tuples containing (read, metadata)
         """
         with pysam.AlignmentFile(self.bam_path, "rb") as bam:
-            # Choose sampling strategy based on simulation size
-            if n_reads < 500:
-                selected_reads = self._select_reads_with_window_limits(bam, n_reads)
-                strategy = "window-limited"
+            if use_legacy_methods:
+                # Legacy hybrid approach for comparison
+                if n_reads < 500:
+                    selected_reads = self._select_reads_with_window_limits(bam, n_reads)
+                    strategy = "legacy-window-limited"
+                else:
+                    selected_reads = self._select_reads_with_proportional_sampling(bam, n_reads)
+                    strategy = "legacy-proportional"
             else:
-                selected_reads = self._select_reads_with_proportional_sampling(bam, n_reads)
-                strategy = "chromosome-proportional"
+                # New unified approach (default)
+                selected_reads = self._select_reads_unified(bam, n_reads)
+                strategy = "unified"
             
             # Calculate chromosome distribution for logging
             chrom_counts = {}
@@ -541,27 +745,34 @@ class ReadSelector:
             
             return selected_reads
     
-    def select_lazy_reads(self, n_reads: int) -> List[LazyReadReference]:
+    def select_lazy_reads(self, n_reads: int, use_legacy_methods: bool = False) -> List[LazyReadReference]:
         """
-        Select reads from BAM file using hybrid sampling strategy, returning lazy references.
+        Select reads from BAM file using unified sampling strategy, returning lazy references.
         
-        For small simulations (< 500 reads): Uses window-limited sampling with better distribution
-        For large simulations (≥ 500 reads): Uses chromosome-proportional sampling
+        By default uses the new unified method that combines proportional allocation
+        with strict window limits to prevent false positives. Legacy methods can
+        be used for comparison testing.
         
         Args:
             n_reads: Number of reads to select
+            use_legacy_methods: If True, use original hybrid strategy for comparison
             
         Returns:
             List of LazyReadReference objects
         """
         with pysam.AlignmentFile(self.bam_path, "rb") as bam:
-            # Choose sampling strategy based on simulation size
-            if n_reads < 500:
-                selected_reads = self._select_lazy_reads_with_window_limits(bam, n_reads)
-                strategy = "window-limited"
+            if use_legacy_methods:
+                # Legacy hybrid approach for comparison
+                if n_reads < 500:
+                    selected_reads = self._select_lazy_reads_with_window_limits(bam, n_reads)
+                    strategy = "legacy-window-limited"
+                else:
+                    selected_reads = self._select_lazy_reads_with_proportional_sampling(bam, n_reads)
+                    strategy = "legacy-proportional"
             else:
-                selected_reads = self._select_lazy_reads_with_proportional_sampling(bam, n_reads)
-                strategy = "chromosome-proportional"
+                # New unified approach (default)
+                selected_reads = self._select_lazy_reads_unified(bam, n_reads)
+                strategy = "unified"
             
             # Calculate chromosome distribution for logging
             chrom_counts = {}

@@ -58,10 +58,12 @@ def cli(ctx, verbose):
               help='Minimum distance from read ends for insertion (default: 1000)')
 @click.option('--random-seed', type=int,
               help='Random seed for reproducibility')
+@click.option('--max-reads-per-window', default=1, type=int,
+              help='Maximum reads per genomic window (default: 1 for de novo simulation)')
 @click.pass_context
 def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
              min_mapq, max_soft_clip_ratio, min_read_length, max_read_length,
-             min_distance_from_ends, random_seed):
+             min_distance_from_ends, random_seed, max_reads_per_window):
     """
     Run de novo variant insertion simulation.
     Produces four output files:
@@ -106,7 +108,7 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
         logger.info(f"Generated {total_insertions} insertion sequences")
         read_selector = ReadSelector(
             bam_file, min_mapq, max_soft_clip_ratio,
-            min_read_length, max_read_length
+            min_read_length, max_read_length, max_reads_per_window
         )
         
         logger.info(f"Selecting {total_insertions} reads from BAM file")

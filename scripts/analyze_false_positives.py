@@ -14,20 +14,24 @@ from collections import defaultdict, Counter
 from itertools import combinations
 import matplotlib.pyplot as plt
 import seaborn as sns
+import argparse
+import sys
 
-def load_data():
+def load_data(output_dir, output_prefix="nova"):
     """Load variant data and insertion metadata."""
+    output_path = Path(output_dir)
+    
     # Load tabular variant data
-    tabular_file = "output/nova_variant_analysis_tabular.csv"
-    if not Path(tabular_file).exists():
+    tabular_file = output_path / f"{output_prefix}_variant_analysis_tabular.csv"
+    if not tabular_file.exists():
         raise FileNotFoundError(f"Tabular data file not found: {tabular_file}")
     
     variants_df = pd.read_csv(tabular_file)
     print(f"Loaded {len(variants_df)} variant records from tabular data")
     
     # Load insertion metadata
-    insertions_file = "output/nova_insertions.json"
-    if not Path(insertions_file).exists():
+    insertions_file = output_path / f"{output_prefix}_insertions.json"
+    if not insertions_file.exists():
         raise FileNotFoundError(f"Insertions file not found: {insertions_file}")
         
     with open(insertions_file, 'r') as f:
@@ -90,7 +94,7 @@ def categorize_false_positives(variants_df):
     successful_calls = variant_groups[variant_groups['is_single_read_call'] == True]
     false_positives = variant_groups[variant_groups['is_single_read_call'] == False]
     
-    print(f"\\nVariant Classification:")
+    print(f"\nVariant Classification:")
     print(f"  Successful calls (single nova read): {len(successful_calls)}")
     print(f"  False positives: {len(false_positives)}")
     
@@ -130,7 +134,7 @@ def categorize_false_positives(variants_df):
     
     # Print category counts
     category_counts = Counter([fp['category'] for fp in fp_categories.values()])
-    print(f"\\nFalse Positive Categories:")
+    print(f"\nFalse Positive Categories:")
     for category, count in category_counts.items():
         print(f"  {category}: {count}")
     
@@ -337,30 +341,30 @@ def save_results(fp_categories, pattern_analysis, detailed_causes, summary_stats
 def print_analysis_summary(summary_stats):
     """Print a comprehensive analysis summary."""
     
-    print("\\n" + "="*60)
+    print("\n" + "="*60)
     print("FALSE POSITIVE ANALYSIS SUMMARY")
     print("="*60)
     
-    print(f"\\nTotal False Positives: {summary_stats['total_false_positives']}")
+    print(f"\nTotal False Positives: {summary_stats['total_false_positives']}")
     
-    print("\\n1. FALSE POSITIVE CATEGORIES:")
+    print("\n1. FALSE POSITIVE CATEGORIES:")
     for category, count in summary_stats['category_breakdown'].items():
         percentage = (count / summary_stats['total_false_positives']) * 100
         print(f"   {category}: {count} ({percentage:.1f}%)")
     
-    print("\\n2. INSERTION TYPE INVOLVEMENT:")
+    print("\n2. INSERTION TYPE INVOLVEMENT:")
     type_involvement = summary_stats['insertion_type_involvement']
     for ins_type, count in sorted(type_involvement.items(), key=lambda x: x[1], reverse=True):
         print(f"   {ins_type}: {count} false positives")
     
-    print("\\n3. PATTERN ANALYSIS:")
+    print("\n3. PATTERN ANALYSIS:")
     patterns = summary_stats['pattern_statistics']
     total_fps = summary_stats['total_false_positives']
     for pattern, count in patterns.items():
         percentage = (count / total_fps) * 100 if total_fps > 0 else 0
         print(f"   {pattern}: {count} ({percentage:.1f}%)")
     
-    print("\\n4. ROOT CAUSE ANALYSIS:")
+    print("\n4. ROOT CAUSE ANALYSIS:")
     root_causes = summary_stats['root_cause_summary']
     for cause, count in root_causes.items():
         percentage = (count / total_fps) * 100 if total_fps > 0 else 0
@@ -368,22 +372,33 @@ def print_analysis_summary(summary_stats):
 
 def main():
     """Main analysis function."""
+    parser = argparse.ArgumentParser(description='Analyze false positive variants in nova simulation results')
+    parser.add_argument('output_dir', help='Output directory containing nova simulation results')
+    parser.add_argument('--output-prefix', default='nova', help='Output file prefix (default: nova)')
+    
+    args = parser.parse_args()
+    
+    # Check if output directory exists
+    if not Path(args.output_dir).exists():
+        print(f"Error: Output directory {args.output_dir} does not exist")
+        return
+    
     print("Starting false positive analysis...")
     
     # Load data
-    variants_df, insertions_data = load_data()
+    variants_df, insertions_data = load_data(args.output_dir, args.output_prefix)
     read_to_insertion, read_to_sequence = create_insertion_lookup(insertions_data)
     
     # Categorize false positives
-    print("\\nCategorizing false positives...")
+    print("\nCategorizing false positives...")
     fp_categories, successful_calls = categorize_false_positives(variants_df)
     
     # Analyze sequence patterns
-    print("\\nAnalyzing sequence patterns...")
+    print("\nAnalyzing sequence patterns...")
     pattern_analysis = analyze_sequence_patterns(fp_categories, read_to_insertion, read_to_sequence)
     
     # Analyze root causes
-    print("\\nAnalyzing root causes...")
+    print("\nAnalyzing root causes...")
     root_cause_summary, detailed_causes = analyze_root_causes(fp_categories, pattern_analysis)
     
     # Generate summary statistics
@@ -393,10 +408,11 @@ def main():
     print_analysis_summary(summary_stats)
     
     # Save results
-    print("\\nSaving results...")
-    json_file, csv_file = save_results(fp_categories, pattern_analysis, detailed_causes, summary_stats)
+    print("\nSaving results...")
+    output_prefix = f"{args.output_dir}/false_positives"
+    json_file, csv_file = save_results(fp_categories, pattern_analysis, detailed_causes, summary_stats, output_prefix)
     
-    print(f"\\nAnalysis complete!")
+    print(f"\nAnalysis complete!")
     print(f"Results saved to:")
     print(f"  - {json_file}")
     print(f"  - {csv_file}")
