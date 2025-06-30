@@ -5,9 +5,6 @@ Nova: De novo variant insertion simulator - Snakemake pipeline
 import json
 from pathlib import Path
 
-# Configuration
-configfile: "snakemake_config.yml"
-
 OUTPUT_DIR = config["output_dir"]
 OUTPUT_PREFIX = config["output_prefix"]
 
@@ -19,7 +16,11 @@ rule all:
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_registry.json",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_statistics.json",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.jl",
-        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.jl"
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.jl",
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_variant_analysis.json",
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_variant_analysis_tabular.csv",
+        f"{OUTPUT_DIR}/false_positives_analysis.json",
+        f"{OUTPUT_DIR}/false_positives_tabular.csv"
 
 rule simulate_variant_reads:
     input:
@@ -38,8 +39,9 @@ rule simulate_variant_reads:
         min_length=config["min_read_length"],
         max_length=config["max_read_length"],
         min_distance_from_ends=config["min_distance_from_ends"],
+        max_reads_per_window=config["max_reads_per_window"]
     conda:
-        "environment.yml"
+        "nova"
     shell:
         """
         nova simulate \
@@ -50,6 +52,7 @@ rule simulate_variant_reads:
         --min-read-length {params.min_length} \
         --max-read-length {params.max_length} \
         --min-distance-from-ends {params.min_distance_from_ends} \
+        --max-reads-per-window {params.max_reads_per_window} \
         -p {params.prefix} \
         -o {params.outdir}
         """
@@ -64,7 +67,7 @@ rule map_reads:
         readgroup = f"@RG\\tID:nova_sim_{config['output_prefix']}",
         minQ = config['min_mapq']
     conda: 
-        "environment.yml"
+        "nova"
     threads: 4
     shell: 
         """
@@ -85,7 +88,7 @@ rule index_bam:
     output:
         bai = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_{{fn}}.bam.bai"
     conda: 
-        "environment.yml"
+        "nova"
     threads: 4
     shell:
         "samtools index -@ {threads} {input.bam} {output.bai}"
@@ -98,8 +101,8 @@ rule merge_sim_base_bams:
     output:
         merged_bam = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.bam"
     conda: 
-        "environment.yml"
-    threads: 4
+        "nova"
+    threads: 8
     shell:
         "samtools merge -@ {threads} {output.merged_bam} {input.sim_bam} {input.base_bam}"
 
@@ -111,7 +114,7 @@ rule call_variants_base:
         vcf=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.vcf.gz",
         tbi=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.vcf.gz.tbi"
     conda: 
-        "environment.yml"
+        "nova"
     threads:
         4
     params:
@@ -151,32 +154,32 @@ use rule call_variants_base as call_variants_sim with:
     log:
         f"{OUTPUT_DIR}/logs/{OUTPUT_PREFIX}_simulation.qc_all.log"
 
-rule simulation_benchmark:
-    input:
-        query = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz",
-        query_index = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz.tbi",
-        benchmark = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.vcf.gz",
-        benchmark_index = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.vcf.gz.tbi"
-    output:
-        expand(f"{OUTPUT_DIR}/{{outfiles}}",
-               outfiles = ["tp-base.vcf.gz", "tp-comp.vcf.gz", "fp.vcf.gz", "fn.vcf.gz", "summary.json", "params.json", "candidate.refine.bed", "log.txt"])
-    conda: 
-        "environment.yml"
-    threads: 1
-    params:
-        refgenome = config['reference_genome'],
-        outdir=config["output_dir"],
-    shell:
-        """
-        # --pctseq 0 required to analyze <DEL> (unresolved deletion, needs clarification?)
-        truvari bench \
-        -f {params.refgenome} \
-        -b {input.base} \
-        -c {input.query} \
-        -o {params.outdir}/bench \
-        -r 1000 \
-        --dup-to-ins
-        """
+# rule simulation_benchmark:
+#     input:
+#         query = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz",
+#         query_index = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz.tbi",
+#         benchmark = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.vcf.gz",
+#         benchmark_index = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.vcf.gz.tbi"
+#     output:
+#         expand(f"{OUTPUT_DIR}/{{outfiles}}",
+#                outfiles = ["tp-base.vcf.gz", "tp-comp.vcf.gz", "fp.vcf.gz", "fn.vcf.gz", "summary.json", "params.json", "candidate.refine.bed", "log.txt"])
+#     conda: 
+#         "nova"
+#     threads: 1
+#     params:
+#         refgenome = config['reference_genome'],
+#         outdir=config["output_dir"],
+#     shell:
+#         """
+#         # --pctseq 0 required to analyze <DEL> (unresolved deletion, needs clarification?)
+#         truvari bench \
+#         -f {params.refgenome} \
+#         -b {input.base} \
+#         -c {input.query} \
+#         -o {params.outdir}/bench \
+#         -r 1000 \
+#         --dup-to-ins
+#         """
 
 rule vcf2df:
     input:
@@ -184,9 +187,43 @@ rule vcf2df:
     output:
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_{{fn}}.jl"
     conda: 
-        "environment.yml"
+        "nova"
     threads: 1
     shell:
         """
         truvari vcf2df --info --format {input} {output}
+        """
+
+rule analyze_vcf_results:
+    input:
+        "scripts/analyze_vcf_results.py",
+        vcf=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz"
+    output:
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_variant_analysis.json",
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_variant_analysis_tabular.csv"
+    conda:
+        "nova"
+    threads: 1
+    params:
+        outdir = config["output_dir"],
+    shell:
+        """
+        python scripts/analyze_vcf_results.py {params.outdir}
+        """
+
+rule analyze_false_positives:
+    input:
+        "scripts/analyze_false_positives.py",
+        vcf=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_variant_analysis_tabular.csv"
+    output:
+        f"{OUTPUT_DIR}/false_positives_analysis.json",
+        f"{OUTPUT_DIR}/false_positives_tabular.csv"
+    conda:
+        "nova"
+    threads: 1
+    params:
+        outdir = config["output_dir"],
+    shell:
+        """
+        python scripts/analyze_false_positives.py {params.outdir}
         """

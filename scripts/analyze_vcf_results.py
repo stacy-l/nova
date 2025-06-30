@@ -396,24 +396,48 @@ def generate_summary_report(nova_variants, categories, type_detection, alignment
     statistics_file = "output/nova_statistics.json"
     expected_counts = load_expected_counts(statistics_file)
     
-    print("\n1. EXPECTED vs DETECTED INSERTION COUNTS:")
+    print("\n1. TRUE POSITIVE ANALYSIS (Single Nova-Only Calls):")
     total_expected = 0
-    total_detected = 0
+    total_single_nova_calls = 0
+    unique_nova_reads = set()
+    
+    # Collect all unique nova reads
+    for variant in nova_variants:
+        for read_name in variant.get('nova_read_names', []):
+            unique_nova_reads.add(read_name)
+    
     for ins_type in sorted(expected_counts.keys()):
         expected = expected_counts[ins_type]
-        detected = len(type_detection.get(ins_type, []))
-        detection_rate = (detected / expected * 100) if expected > 0 else 0
-        print(f"   {ins_type}: {detected}/{expected} ({detection_rate:.1f}%)")
+        type_variants = type_detection.get(ins_type, [])
+        single_nova_calls = sum(1 for v in type_variants if v.get('support_reads', 0) == 1 and v.get('nova_reads', 0) == 1)
+        
+        # Count unique nova reads for this type
+        type_unique_reads = set()
+        for variant in type_variants:
+            for read_name in variant.get('nova_read_names', []):
+                type_unique_reads.add(read_name)
+        
+        true_positive_rate = (single_nova_calls / expected * 100) if expected > 0 else 0
+        read_utilization = (len(type_unique_reads) / expected * 100) if expected > 0 else 0
+        
+        print(f"   {ins_type}: {single_nova_calls}/{expected} true positives ({true_positive_rate:.1f}%), {len(type_unique_reads)} reads utilized ({read_utilization:.1f}%)")
         total_expected += expected
-        total_detected += detected
+        total_single_nova_calls += single_nova_calls
     
-    overall_rate = (total_detected / total_expected * 100) if total_expected > 0 else 0
-    print(f"   OVERALL: {total_detected}/{total_expected} ({overall_rate:.1f}%)")
+    overall_true_positive_rate = (total_single_nova_calls / total_expected * 100) if total_expected > 0 else 0
+    overall_read_utilization = (len(unique_nova_reads) / total_expected * 100) if total_expected > 0 else 0
+    print(f"   OVERALL: {total_single_nova_calls}/{total_expected} true positives ({overall_true_positive_rate:.1f}%)")
+    print(f"   READ UTILIZATION: {len(unique_nova_reads)}/{total_expected} nova reads detected ({overall_read_utilization:.1f}%)")
     
-    print("\n2. SUCCESSFUL CALLS (Single Nova Read Only):")
-    successful = categories['single_read_calls']['single_nova_only']
-    success_rate = (successful / len(nova_variants) * 100) if nova_variants else 0
-    print(f"   Single nova read only: {successful}/{len(nova_variants)} ({success_rate:.1f}%)")
+    print("\n2. DETECTION QUALITY ANALYSIS:")
+    total_variants = len(nova_variants)
+    false_positives = total_variants - total_single_nova_calls
+    detection_quality = (total_single_nova_calls / total_variants * 100) if total_variants > 0 else 0
+    false_positive_rate = (false_positives / total_variants * 100) if total_variants > 0 else 0
+    
+    print(f"   Total variants detected: {total_variants}")
+    print(f"   True positives (single nova-only): {total_single_nova_calls} ({detection_quality:.1f}%)")
+    print(f"   False positives (multi-read/mixed): {false_positives} ({false_positive_rate:.1f}%)")
     
     print("\n3. READ COMPOSITION BREAKDOWN:")
     for comp_type, count in sorted(categories['by_read_composition'].items()):
@@ -490,20 +514,49 @@ def save_detailed_results(nova_variants, categories, type_detection, alignment_c
     # Calculate summary statistics
     expected_counts = load_expected_counts(statistics_file)
     
-    # Detection rates by type
-    detection_rates = {}
+    # Calculate cleaner metrics - True Positive Rates and Nova Read Utilization
+    true_positive_rates = {}
+    nova_read_utilization = {}
+    detection_quality = {}
     total_expected = 0
-    total_detected = 0
+    total_single_nova_calls = 0
+    total_variants_detected = len(nova_variants)
+    unique_nova_reads = set()
+    
+    # Collect all unique nova reads that were detected
+    for variant in nova_variants:
+        for read_name in variant.get('nova_read_names', []):
+            unique_nova_reads.add(read_name)
+    
     for ins_type in sorted(expected_counts.keys()):
         expected = expected_counts[ins_type]
-        detected = len(type_detection.get(ins_type, []))
-        detection_rates[ins_type] = {
-            'expected': expected,
-            'detected': detected,
-            'rate': (detected / expected * 100) if expected > 0 else 0
-        }
         total_expected += expected
-        total_detected += detected
+        
+        # Count single nova-only calls for this insertion type
+        type_variants = type_detection.get(ins_type, [])
+        single_nova_calls = sum(1 for v in type_variants if v.get('support_reads', 0) == 1 and v.get('nova_reads', 0) == 1)
+        total_single_nova_calls += single_nova_calls
+        
+        # Count unique nova reads for this type
+        type_unique_reads = set()
+        for variant in type_variants:
+            for read_name in variant.get('nova_read_names', []):
+                type_unique_reads.add(read_name)
+        
+        # Calculate metrics
+        true_positive_rate = (single_nova_calls / expected * 100) if expected > 0 else 0
+        read_utilization_rate = (len(type_unique_reads) / expected * 100) if expected > 0 else 0
+        type_quality = (single_nova_calls / len(type_variants) * 100) if len(type_variants) > 0 else 0
+        
+        true_positive_rates[ins_type] = {
+            'expected_insertions': expected,
+            'single_nova_calls': single_nova_calls,
+            'true_positive_rate': true_positive_rate,
+            'total_variants_detected': len(type_variants),
+            'unique_nova_reads_detected': len(type_unique_reads),
+            'read_utilization_rate': read_utilization_rate,
+            'detection_quality': type_quality
+        }
     
     # Alignment statistics
     alignment_stats = {}
@@ -575,15 +628,27 @@ def save_detailed_results(nova_variants, categories, type_detection, alignment_c
     supports = [v['SUPPORT'] for v in nova_variants]
     nova_fractions = [v['nova_reads']/v['support_reads'] for v in nova_variants]
     
+    # Calculate overall metrics
+    overall_true_positive_rate = (total_single_nova_calls / total_expected * 100) if total_expected > 0 else 0
+    overall_read_utilization = (len(unique_nova_reads) / total_expected * 100) if total_expected > 0 else 0
+    overall_detection_quality = (total_single_nova_calls / total_variants_detected * 100) if total_variants_detected > 0 else 0
+    false_positive_count = total_variants_detected - total_single_nova_calls
+    false_positive_rate = (false_positive_count / total_variants_detected * 100) if total_variants_detected > 0 else 0
+
     output_data = {
         'metadata': {
             'analysis_timestamp': pd.Timestamp.now().isoformat(),
             'total_nova_variants': len(nova_variants),
             'total_expected_insertions': total_expected,
-            'total_detected_insertions': total_detected,
-            'overall_detection_rate': (total_detected / total_expected * 100) if total_expected > 0 else 0
+            'total_single_nova_calls': total_single_nova_calls,
+            'unique_nova_reads_detected': len(unique_nova_reads),
+            'overall_true_positive_rate': overall_true_positive_rate,
+            'overall_read_utilization_rate': overall_read_utilization,
+            'overall_detection_quality': overall_detection_quality,
+            'false_positive_count': false_positive_count,
+            'false_positive_rate': false_positive_rate
         },
-        'detection_rates': detection_rates,
+        'true_positive_analysis': true_positive_rates,
         'variant_categories': {
             'by_svtype': dict(categories['by_svtype']),
             'by_precision': dict(categories['by_precision']),
