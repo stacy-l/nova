@@ -5,6 +5,7 @@ Command line interface for Nova variant insertion simulator.
 import click
 import json
 import logging
+import random
 import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -159,6 +160,11 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
             sys.exit(1)
         
         logger.info(f"Total reads selected: {len(all_reads_with_metadata)} for {len(all_insertion_ids)} insertions")
+        
+        # Shuffle insertion IDs to randomize distribution of insertion types across chromosomes
+        if random_seed is not None:
+            random.seed(random_seed)
+        random.shuffle(all_insertion_ids)
         
         read_inserter = ReadInserter(registry, min_distance_from_ends, random_seed)
         logger.info("Inserting sequences into reads")
