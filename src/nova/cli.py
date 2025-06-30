@@ -61,15 +61,13 @@ def cli(ctx, verbose):
               help='Random seed for reproducibility')
 @click.option('--max-reads-per-window', default=1, type=int,
               help='Maximum reads per genomic window (default: 1 for de novo simulation)')
-@click.option('--exclusion-regions', multiple=True, type=click.Path(exists=True),
-              help='BED files containing regions to exclude from simulation (can be specified multiple times)')
 @click.option('--disable-exclusion-regions', is_flag=True,
-              help='Disable exclusion region filtering (overrides any exclusion-regions specified)')
+              help='Disable exclusion region filtering (overrides exclusion_regions from config)')
 @click.pass_context
 def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
              min_mapq, max_soft_clip_ratio, min_read_length, max_read_length,
              min_distance_from_ends, random_seed, max_reads_per_window,
-             exclusion_regions, disable_exclusion_regions):
+             disable_exclusion_regions):
     """
     Run de novo variant insertion simulation.
     Produces four output files:
@@ -103,11 +101,12 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
                 logger.error(f"  - {error}")
             sys.exit(1)
         
-        # Setup exclusion regions
+        # Setup exclusion regions from config
         exclusion_filter = None
-        if not disable_exclusion_regions and exclusion_regions:
-            logger.info(f"Loading exclusion regions from {len(exclusion_regions)} BED files")
-            exclusion_filter = create_exclusion_filter_from_config(list(exclusion_regions))
+        config_exclusions = config.get('exclusion_regions', [])
+        if not disable_exclusion_regions and config_exclusions:
+            logger.info(f"Loading exclusion regions from {len(config_exclusions)} BED files")
+            exclusion_filter = create_exclusion_filter_from_config(config_exclusions)
         
         logger.info("Generating insertion sequences grouped by target regions")
         region_groups = generator.generate_from_config_with_regions(config)
@@ -185,7 +184,7 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
                 'total_insertions_requested': total_insertions,
                 'reads_selected': len(all_reads_with_metadata),
                 'insertions_completed': len(insertion_records),
-                'exclusion_regions_used': list(exclusion_regions) if exclusion_regions and not disable_exclusion_regions else [],
+                'exclusion_regions_used': config_exclusions if config_exclusions and not disable_exclusion_regions else [],
                 'exclusion_regions_disabled': disable_exclusion_regions,
                 'region_groups': {k: len(v) for k, v in region_groups.items()}
             },
