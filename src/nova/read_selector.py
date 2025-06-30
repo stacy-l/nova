@@ -8,6 +8,8 @@ from typing import List, Dict, Optional, Tuple
 import logging
 from dataclasses import dataclass
 
+from .region_utils import RegionFilter
+
 
 @dataclass
 class ReadMetadata:
@@ -65,7 +67,8 @@ class ReadSelector:
     
     def __init__(self, bam_path: str, min_mapq: int = 20, max_soft_clip_ratio: float = 0.1,
                  min_read_length: int = 10000, max_read_length: int = 20000, 
-                 max_reads_per_window: int = 1):
+                 max_reads_per_window: int = 1, target_regions: Optional[RegionFilter] = None,
+                 exclusion_regions: Optional[RegionFilter] = None):
         """
         Initialize ReadSelector.
         
@@ -76,6 +79,8 @@ class ReadSelector:
             min_read_length: Minimum read length
             max_read_length: Maximum read length
             max_reads_per_window: Maximum reads per genomic window (default: 1 for de novo simulation)
+            target_regions: Optional RegionFilter for inclusion filtering (only select reads overlapping these regions)
+            exclusion_regions: Optional RegionFilter for exclusion filtering (avoid reads overlapping these regions)
         """
         self.bam_path = bam_path
         self.min_mapq = min_mapq
@@ -83,7 +88,18 @@ class ReadSelector:
         self.min_read_length = min_read_length
         self.max_read_length = max_read_length
         self.max_reads_per_window = max_reads_per_window
+        self.target_regions = target_regions
+        self.exclusion_regions = exclusion_regions
         self.logger = logging.getLogger(__name__)
+        
+        # Log region filtering configuration
+        if self.target_regions:
+            stats = self.target_regions.get_statistics()
+            self.logger.info(f"Targeting {stats['total_regions']} regions across {stats['chromosomes']} chromosomes")
+        
+        if self.exclusion_regions:
+            stats = self.exclusion_regions.get_statistics()
+            self.logger.info(f"Excluding {stats['total_regions']} regions across {stats['chromosomes']} chromosomes")
         
     def _calculate_gc_content(self, sequence: str) -> float:
         """
@@ -120,9 +136,40 @@ class ReadSelector:
         
         return total_soft_clipped / read.query_length if read.query_length > 0 else 0.0
     
+    def _passes_region_filters(self, read: pysam.AlignedSegment) -> bool:
+        """
+        Check if read passes region filtering criteria.
+        
+        Args:
+            read: Aligned read segment
+            
+        Returns:
+            True if read passes region filters (or no region filters are set)
+        """
+        # Get read coordinates
+        read_chr = read.reference_name
+        read_start = read.reference_start
+        read_end = read.reference_end
+        
+        # Skip reads with invalid coordinates
+        if read_chr is None or read_start is None or read_end is None:
+            return False
+        
+        # Apply exclusion filters first (these take precedence)
+        if self.exclusion_regions:
+            if self.exclusion_regions.overlaps_read(read_chr, read_start, read_end):
+                return False
+        
+        # Apply target region filters if specified
+        if self.target_regions:
+            if not self.target_regions.overlaps_read(read_chr, read_start, read_end):
+                return False
+        
+        return True
+    
     def _passes_filters(self, read: pysam.AlignedSegment) -> bool:
         """
-        Check if read passes all filtering criteria (primary alignment, mapq, read length, soft clipping)
+        Check if read passes all filtering criteria (primary alignment, mapq, read length, soft clipping, regions)
         """
         if read.is_secondary or read.is_supplementary or read.is_unmapped:
             return False
@@ -135,6 +182,10 @@ class ReadSelector:
 
         soft_clip_ratio = self._calculate_soft_clip_ratio(read)
         if soft_clip_ratio > self.max_soft_clip_ratio:
+            return False
+        
+        # Apply region filtering
+        if not self._passes_region_filters(read):
             return False
         
         return True

@@ -398,6 +398,68 @@ class VariantGenerator:
         self.logger.info(f"Generated {total_generated} predefined insertions from {fasta_path}{mutation_text}")
         return insertion_ids
     
+    def generate_from_config_with_regions(self, config: Dict[str, Any]) -> Dict[str, List[str]]:
+        """
+        Generate insertion sequences grouped by their target region requirements.
+        
+        Args:
+            config: Variant configuration dictionary
+            
+        Returns:
+            Dictionary mapping target BED file paths (or 'global' for no targeting) to lists of insertion IDs
+        """
+        region_groups = {}
+        
+        if 'random' in config:
+            random_configs = self._normalize_to_list(config['random'])
+            for random_config in random_configs:
+                n = random_config['n']
+                length = random_config['length']
+                gc_content = random_config.get('gc_content')
+                mutation_config = random_config.get('mutations')
+                target_regions = random_config.get('target_regions', 'global')
+                
+                ids = self.generate_random_insertions(n, length, gc_content, mutation_config)
+                
+                if target_regions not in region_groups:
+                    region_groups[target_regions] = []
+                region_groups[target_regions].extend(ids)
+        
+        if 'simple' in config:
+            simple_configs = self._normalize_to_list(config['simple'])
+            for simple_config in simple_configs:
+                n = simple_config['n']
+                repeat_unit = simple_config['repeat']
+                units = simple_config['units']
+                mutation_config = simple_config.get('mutations')
+                target_regions = simple_config.get('target_regions', 'global')
+                
+                ids = self.generate_simple_repeat_insertions(n, repeat_unit, units, mutation_config)
+                
+                if target_regions not in region_groups:
+                    region_groups[target_regions] = []
+                region_groups[target_regions].extend(ids)
+        
+        if 'predefined' in config:
+            predefined_configs = self._normalize_to_list(config['predefined'])
+            for pred_config in predefined_configs:
+                for pred_type, type_config in pred_config.items():
+                    fasta_path = type_config['fasta']
+                    sequence_counts = type_config['spec']
+                    mutation_config = type_config.get('mutations')
+                    target_regions = type_config.get('target_regions', 'global')
+                    
+                    ids = self.generate_predefined_insertions(fasta_path, sequence_counts, mutation_config)
+                    
+                    if target_regions not in region_groups:
+                        region_groups[target_regions] = []
+                    region_groups[target_regions].extend(ids)
+        
+        total_generated = sum(len(ids) for ids in region_groups.values())
+        self.logger.info(f"Generated total of {total_generated} insertion sequences across {len(region_groups)} region groups")
+        
+        return region_groups
+
     def generate_from_config(self, config: Dict[str, Any]) -> List[str]:
         """
         Generate insertion sequences from configuration dictionary.
@@ -503,6 +565,12 @@ class VariantGenerator:
                 if 'mutations' in random_config:
                     mutation_errors = self._validate_mutation_config(random_config['mutations'], prefix)
                     errors.extend(mutation_errors)
+                
+                # Validate target_regions if present
+                if 'target_regions' in random_config:
+                    target_bed = random_config['target_regions']
+                    if not isinstance(target_bed, str) or not target_bed.strip():
+                        errors.append(f"{prefix}'target_regions' must be a non-empty string path to BED file")
         
         if 'simple' in config:
             simple_configs = self._normalize_to_list(config['simple'])
@@ -526,6 +594,12 @@ class VariantGenerator:
                 if 'mutations' in simple_config:
                     mutation_errors = self._validate_mutation_config(simple_config['mutations'], prefix)
                     errors.extend(mutation_errors)
+                
+                # Validate target_regions if present
+                if 'target_regions' in simple_config:
+                    target_bed = simple_config['target_regions']
+                    if not isinstance(target_bed, str) or not target_bed.strip():
+                        errors.append(f"{prefix}'target_regions' must be a non-empty string path to BED file")
         
         if 'predefined' in config:
             predefined_configs = self._normalize_to_list(config['predefined'])
@@ -546,5 +620,11 @@ class VariantGenerator:
                     if 'mutations' in type_config:
                         mutation_errors = self._validate_mutation_config(type_config['mutations'], f"{prefix}'{pred_type}' ")
                         errors.extend(mutation_errors)
+                    
+                    # Validate target_regions if present
+                    if 'target_regions' in type_config:
+                        target_bed = type_config['target_regions']
+                        if not isinstance(target_bed, str) or not target_bed.strip():
+                            errors.append(f"{prefix}'{pred_type}' 'target_regions' must be a non-empty string path to BED file")
         
         return errors

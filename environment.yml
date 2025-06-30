@@ -9,6 +9,7 @@ dependencies:
   - bedtools>=2.30.0
   - numpy>=1.20.0
   - biopython>=1.79
+  - pyranges>=0.0.129
   - click>=8.0.0
   - samtools>=1.15
   - bcftools>=1.15
