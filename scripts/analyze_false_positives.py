@@ -90,13 +90,20 @@ def categorize_false_positives(variants_df):
         'svlen': 'first'
     }).reset_index()
     
-    # Categorize variants
-    successful_calls = variant_groups[variant_groups['is_single_read_call'] == True]
-    false_positives = variant_groups[variant_groups['is_single_read_call'] == False]
+    true_positives = variant_groups[variant_groups['is_true_positive'] == True]
+    mapping_errors = variant_groups[variant_groups['is_mapping_error'] == True]
+    other_false_positives = variant_groups[
+        (variant_groups['is_single_read_call'] == False) | 
+        (variant_groups['is_mapping_error'] == True)
+    ]
     
     print(f"\nVariant Classification:")
-    print(f"  Successful calls (single nova read): {len(successful_calls)}")
-    print(f"  False positives: {len(false_positives)}")
+    print(f"  True positives (correct mapping): {len(true_positives)}")
+    print(f"  Mapping errors (single nova, wrong location): {len(mapping_errors)}")
+    print(f"  Other false positives (multi-read/mixed): {len(other_false_positives) - len(mapping_errors)}")
+    
+    # Combine mapping errors with other false positives for analysis
+    false_positives = other_false_positives
     
     # Categorize false positives
     fp_categories = {}
@@ -108,7 +115,11 @@ def categorize_false_positives(variants_df):
         
         variant_idx = variant['variant_index']
         
-        if nova_reads > 1 and non_nova_reads == 0:
+        # Check if this is a mapping error (single nova read with incorrect mapping)
+        if (nova_reads == 1 and non_nova_reads == 0 and 
+            'is_mapping_error' in variant and variant['is_mapping_error']):
+            category = "single_nova_mapping_error"
+        elif nova_reads > 1 and non_nova_reads == 0:
             category = "multiple_nova_only"
         elif nova_reads >= 1 and non_nova_reads >= 1:
             if nova_reads >= non_nova_reads:

@@ -20,13 +20,11 @@ import subprocess
 import argparse
 import sys
 
-# Try to import pysam, but handle gracefully if it fails
 try:
     import pysam
-    PYSAM_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: pysam not available ({e}). BAM analysis will be skipped.")
-    PYSAM_AVAILABLE = False
+    print(f"Error: pysam is required to analyze BAM files. ({e})")
+    sys.exit(1)
 
 def load_vcf_data(jl_file):
     """Load VCF data from joblib file."""
@@ -93,15 +91,28 @@ def identify_nova_variants(df):
     print(f"Found {len(nova_variants)} variants with nova reads!")
     return nova_variants
 
-def categorize_variants(nova_variants):
-    """Categorize variants by type, precision, and support."""
+def categorize_variants(nova_variants, mapping_verification=None):
+    """
+    Categorize variants by type, precision, and support.
+    
+    Args:
+        nova_variants: List of variants containing nova reads
+        mapping_verification: Optional dict mapping read names to mapping status.
+                            If provided, enables true positive categorization.
+    """
     categories = {
         'by_svtype': defaultdict(int),
         'by_precision': defaultdict(int),
         'by_support_level': defaultdict(int),
         'by_nova_fraction': defaultdict(int),
         'by_read_composition': defaultdict(int),
-        'single_read_calls': {'single_nova_only': 0, 'total_variants': len(nova_variants)}
+        'single_read_calls': {
+            'single_nova_only_total': 0,
+            'single_nova_only_correct_mapping': 0,
+            'single_nova_only_incorrect_mapping': 0,
+            'single_nova_only_unknown_mapping': 0,
+            'total_variants': len(nova_variants)
+        }
     }
     
     # Detailed read support breakdown
@@ -143,7 +154,20 @@ def categorize_variants(nova_variants):
         
         # Track successful calls (single nova read, no other reads)
         if support_reads == 1 and nova_reads == 1:
-            categories['single_read_calls']['single_nova_only'] += 1
+            categories['single_read_calls']['single_nova_only_total'] += 1
+            
+            # If mapping verification is available, categorize by mapping accuracy
+            if mapping_verification is not None:
+                nova_read_name = variant['nova_read_names'][0]  # Single read, so take first (and only)
+                mapping_status = mapping_verification.get(nova_read_name, 'unknown')
+                
+                if mapping_status == 'correct_mapping':
+                    categories['single_read_calls']['single_nova_only_correct_mapping'] += 1
+                elif mapping_status == 'incorrect_mapping':
+                    categories['single_read_calls']['single_nova_only_incorrect_mapping'] += 1
+                else:
+                    # Covers 'unknown', 'no_original_position', 'not_found_in_bam', 'error' statuses
+                    categories['single_read_calls']['single_nova_only_unknown_mapping'] += 1
         
         # Read composition categories
         if support_reads == 1:
@@ -313,6 +337,104 @@ def compare_alignment_positions(nova_variants, insertions_file, original_bam_fil
         print(f"Error comparing alignment positions: {e}")
         return []
 
+def verify_mapping_locations(nova_variants, insertions_file, modified_bam_file, position_tolerance=1000):
+    """
+    Verify that nova reads in variants map to the same locations as their original base reads.
+    
+    This is a streamlined version of compare_alignment_positions specifically designed for
+    categorizing true/false positives based on mapping accuracy.
+    
+    Args:
+        nova_variants: List of variants containing nova reads
+        insertions_file: Path to JSON file with insertion records
+        modified_bam_file: Path to BAM file with modified reads
+        position_tolerance: Maximum allowed position difference (default: 1000bp)
+        
+    Returns:
+        Dictionary mapping read names to mapping verification status
+    """
+    try:
+        # Load insertion metadata to get original positions
+        with open(insertions_file, 'r') as f:
+            insertions = json.load(f)
+        
+        # Create mapping from modified read name to original position
+        read_to_original_pos = {}
+        for insertion in insertions:
+            modified_name = insertion.get('modified_read_name', '')
+            original_chrom = insertion.get('original_chr', '')
+            original_pos = insertion.get('original_pos', 0)
+            
+            if modified_name and original_chrom and original_pos > 0:
+                read_to_original_pos[modified_name] = {
+                    'chrom': original_chrom,
+                    'pos': original_pos
+                }
+        
+        print(f"Loaded original positions for {len(read_to_original_pos)} nova reads")
+        
+        # Verify mapping locations for nova reads in variants
+        mapping_verification = {}
+        
+        if not Path(modified_bam_file).exists():
+            print(f"Warning: Modified BAM file {modified_bam_file} not found")
+            # Return all reads as "unknown" status
+            for variant in nova_variants:
+                for nova_read_name in variant.get('nova_read_names', []):
+                    mapping_verification[nova_read_name] = 'unknown'
+            return mapping_verification
+        
+        # Create index of reads we need to check
+        target_reads = set()
+        for variant in nova_variants:
+            target_reads.update(variant.get('nova_read_names', []))
+        
+        with pysam.AlignmentFile(modified_bam_file, 'rb') as modified_bam:
+            # Iterate through BAM file once to find all target reads
+            for read in modified_bam.fetch():
+                if read.query_name in target_reads:
+                    read_name = read.query_name
+                    
+                    if read_name in read_to_original_pos:
+                        original_info = read_to_original_pos[read_name]
+                        
+                        # Compare positions
+                        original_chrom = original_info['chrom']
+                        original_pos = original_info['pos']
+                        modified_chrom = read.reference_name
+                        modified_pos = read.reference_start
+                        
+                        # Determine mapping status
+                        if (original_chrom == modified_chrom and 
+                            modified_pos is not None and
+                            abs(original_pos - modified_pos) <= position_tolerance):
+                            mapping_verification[read_name] = 'correct_mapping'
+                        else:
+                            mapping_verification[read_name] = 'incorrect_mapping'
+                    else:
+                        # Read not found in insertion records
+                        mapping_verification[read_name] = 'no_original_position'
+        
+        # Mark any remaining target reads as not found in BAM
+        for read_name in target_reads:
+            if read_name not in mapping_verification:
+                if read_name in read_to_original_pos:
+                    mapping_verification[read_name] = 'not_found_in_bam'
+                else:
+                    mapping_verification[read_name] = 'no_original_position'
+        
+        print(f"Verified mapping locations for {len(mapping_verification)} nova reads")
+        return mapping_verification
+        
+    except Exception as e:
+        print(f"Error verifying mapping locations: {e}")
+        # Return all reads with unknown status
+        mapping_verification = {}
+        for variant in nova_variants:
+            for nova_read_name in variant.get('nova_read_names', []):
+                mapping_verification[nova_read_name] = 'error'
+        return mapping_verification
+
 def compare_insertion_sizes(nova_variants, insertions_file):
     """Compare generated insertion sizes with detected variant SVLEN values."""
     try:
@@ -348,11 +470,15 @@ def compare_insertion_sizes(nova_variants, insertions_file):
                     # Calculate size accuracy
                     size_diff = abs(generated_size - variant_svlen)
                     size_ratio = min(generated_size, variant_svlen) / max(generated_size, variant_svlen) if max(generated_size, variant_svlen) > 0 else 0
+                    size_accuracy = None
                     
                     # Categorize accuracy
-                    exact_match = (size_diff == 0)
-                    close_match = (size_diff <= 10)  # Within 10bp
-                    reasonable_match = (size_ratio >= 0.8)  # Within 20% of each other
+                    if size_diff == 0:
+                        size_accuracy = 'exact'
+                    elif size_diff <= 10:
+                        size_accuracy = 'close'
+                    elif size_ratio >= 0.8:
+                        size_accuracy = 'reasonable'
                     
                     size_comparisons.append({
                         'variant_index': variant['index'],
@@ -361,9 +487,7 @@ def compare_insertion_sizes(nova_variants, insertions_file):
                         'variant_svlen': variant_svlen,
                         'size_diff': size_diff,
                         'size_ratio': size_ratio,
-                        'exact_match': exact_match,
-                        'close_match': close_match,
-                        'reasonable_match': reasonable_match,
+                        'size_accuracy': size_accuracy,
                         'insertion_type': read_to_insertion_type.get(nova_read_name, 'unknown')
                     })
         
@@ -431,13 +555,40 @@ def generate_summary_report(nova_variants, categories, type_detection, alignment
     
     print("\n2. DETECTION QUALITY ANALYSIS:")
     total_variants = len(nova_variants)
-    false_positives = total_variants - total_single_nova_calls
-    detection_quality = (total_single_nova_calls / total_variants * 100) if total_variants > 0 else 0
-    false_positive_rate = (false_positives / total_variants * 100) if total_variants > 0 else 0
     
-    print(f"   Total variants detected: {total_variants}")
-    print(f"   True positives (single nova-only): {total_single_nova_calls} ({detection_quality:.1f}%)")
-    print(f"   False positives (multi-read/mixed): {false_positives} ({false_positive_rate:.1f}%)")
+    # Check if mapping verification was performed
+    single_calls = categories['single_read_calls']
+    if 'single_nova_only_correct_mapping' in single_calls:
+        # Mapping-aware analysis
+        correct_mapping = single_calls['single_nova_only_correct_mapping']
+        incorrect_mapping = single_calls['single_nova_only_incorrect_mapping']
+        unknown_mapping = single_calls['single_nova_only_unknown_mapping']
+        total_single_calls = single_calls['single_nova_only_total']
+        
+        true_positives = correct_mapping
+        mapping_errors = incorrect_mapping
+        unknown_mapping_status = unknown_mapping
+        false_positives = total_variants - total_single_calls
+        
+        true_positive_rate = (true_positives / total_expected * 100) if total_expected > 0 else 0
+        mapping_error_rate = (mapping_errors / total_single_calls * 100) if total_single_calls > 0 else 0
+        
+        print(f"   Total variants detected: {total_variants}")
+        print(f"   Single nova-only calls: {total_single_calls}")
+        print(f"     - Correct mapping (true positives): {correct_mapping} ({true_positive_rate:.1f}%)")
+        print(f"     - Incorrect mapping (mapping errors): {incorrect_mapping} ({mapping_error_rate:.1f}%)")
+        print(f"     - Unknown mapping status: {unknown_mapping}")
+        print(f"   False positives (multi-read/mixed): {false_positives}")
+    else:
+        # Original analysis (mapping verification disabled or failed)
+        false_positives = total_variants - total_single_nova_calls
+        detection_quality = (total_single_nova_calls / total_variants * 100) if total_variants > 0 else 0
+        false_positive_rate = (false_positives / total_variants * 100) if total_variants > 0 else 0
+        
+        print(f"   Total variants detected: {total_variants}")
+        print(f"   True positives (single nova-only): {total_single_nova_calls} ({detection_quality:.1f}%)")
+        print(f"   False positives (multi-read/mixed): {false_positives} ({false_positive_rate:.1f}%)")
+        print("   Note: Mapping verification not performed - use refined analysis for better accuracy")
     
     print("\n3. READ COMPOSITION BREAKDOWN:")
     for comp_type, count in sorted(categories['by_read_composition'].items()):
@@ -486,9 +637,9 @@ def generate_summary_report(nova_variants, categories, type_detection, alignment
     if size_comparisons:
         print("\n9. INSERTION SIZE ANALYSIS:")
         total_size_comparisons = len(size_comparisons)
-        exact_matches = sum(1 for c in size_comparisons if c['exact_match'])
-        close_matches = sum(1 for c in size_comparisons if c['close_match'])
-        reasonable_matches = sum(1 for c in size_comparisons if c['reasonable_match'])
+        exact_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'exact')
+        close_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'close')
+        reasonable_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'reasonable')
         
         exact_rate = (exact_matches / total_size_comparisons * 100) if total_size_comparisons > 0 else 0
         close_rate = (close_matches / total_size_comparisons * 100) if total_size_comparisons > 0 else 0
@@ -580,9 +731,9 @@ def save_detailed_results(nova_variants, categories, type_detection, alignment_c
     size_stats = {}
     if size_comparisons:
         total_size_comparisons = len(size_comparisons)
-        exact_matches = sum(1 for c in size_comparisons if c['exact_match'])
-        close_matches = sum(1 for c in size_comparisons if c['close_match'])
-        reasonable_matches = sum(1 for c in size_comparisons if c['reasonable_match'])
+        exact_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'exact')
+        close_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'close')
+        reasonable_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'reasonable')
         
         size_diffs = [c['size_diff'] for c in size_comparisons]
         size_ratios = [c['size_ratio'] for c in size_comparisons]
@@ -615,11 +766,11 @@ def save_detailed_results(nova_variants, categories, type_detection, alignment_c
                 size_by_type[ins_type] = {'exact': 0, 'close': 0, 'reasonable': 0, 'total': 0}
             
             size_by_type[ins_type]['total'] += 1
-            if comp['exact_match']:
+            if comp['size_accuracy'] == 'exact':
                 size_by_type[ins_type]['exact'] += 1
-            if comp['close_match']:
+            if comp['size_accuracy'] == 'close':
                 size_by_type[ins_type]['close'] += 1
-            if comp['reasonable_match']:
+            if comp['size_accuracy'] == 'reasonable':
                 size_by_type[ins_type]['reasonable'] += 1
         
         size_stats['by_insertion_type'] = size_by_type
@@ -679,7 +830,7 @@ def save_detailed_results(nova_variants, categories, type_detection, alignment_c
     
     print(f"\nStructured analysis results saved to: {output_file}")
 
-def save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, output_file):
+def save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, output_file, mapping_verification=None):
     """Save variant data in tabular format for advanced visualizations."""
     
     # Create variant-level records with all categorical information
@@ -718,7 +869,12 @@ def save_tabular_data(nova_variants, categories, type_detection, alignment_compa
             'nova_fraction_category': ('All nova' if variant['nova_reads'] / variant['support_reads'] == 1.0 else
                                      'Majority nova' if variant['nova_reads'] / variant['support_reads'] >= 0.5 else
                                      'Minority nova'),
-            'precision_category': 'PRECISE' if variant['PRECISE'] else 'IMPRECISE'
+            'precision_category': 'PRECISE' if variant['PRECISE'] else 'IMPRECISE',
+            
+            # Mapping verification data (for single nova reads)
+            'mapping_verification_status': None,
+            'is_refined_true_positive': False,
+            'is_mapping_error': False
         }
         
         # Add alignment information if available
@@ -742,6 +898,18 @@ def save_tabular_data(nova_variants, categories, type_detection, alignment_compa
                 'modified_pos': None
             })
         
+        # Add mapping verification data if available (for single nova reads)
+        if (mapping_verification is not None and 
+            variant['support_reads'] == 1 and variant['nova_reads'] == 1):
+            nova_read_name = variant['nova_read_names'][0]
+            mapping_status = mapping_verification.get(nova_read_name, 'unknown')
+            
+            base_record.update({
+                'mapping_verification_status': mapping_status,
+                'is_refined_true_positive': mapping_status == 'correct_mapping',
+                'is_mapping_error': mapping_status == 'incorrect_mapping'
+            })
+        
         # Handle multiple nova reads per variant (create one record per nova read)
         if variant_idx in size_lookup:
             for size_comp in size_lookup[variant_idx]:
@@ -752,9 +920,7 @@ def save_tabular_data(nova_variants, categories, type_detection, alignment_compa
                     'generated_size': size_comp['generated_size'],
                     'size_difference': size_comp['size_diff'],
                     'size_ratio': size_comp['size_ratio'],
-                    'exact_size_match': size_comp['exact_match'],
-                    'close_size_match': size_comp['close_match'],
-                    'reasonable_size_match': size_comp['reasonable_match']
+                    'size_accuracy': size_comp['size_accuracy']
                 })
                 variant_records.append(record)
         else:
@@ -798,7 +964,7 @@ def main():
     parser.add_argument('--output-prefix', default='nova', help='Output file prefix (default: nova)')
     parser.add_argument('--original-bam', default='tests/test_data/test_reads.bam', 
                        help='Path to original BAM file (default: tests/test_data/test_reads.bam)')
-    
+
     args = parser.parse_args()
     
     # Construct file paths using provided output directory
@@ -835,8 +1001,12 @@ def main():
         print("No variants found with nova reads!")
         return
     
+    print("Verifying mapping locations...")
+    mapping_verification = verify_mapping_locations(nova_variants, str(insertions_json), str(modified_bam))
+    
     print("Categorizing variants...")
-    categories = categorize_variants(nova_variants)
+    categories = categorize_variants(nova_variants, mapping_verification)
+    categories = categorize_variants(nova_variants, mapping_verification)
     
     print("Analyzing insertion types...")
     type_detection = analyze_insertion_types(nova_variants, insertions_json)
@@ -854,7 +1024,8 @@ def main():
     
     # Save tabular data for advanced visualizations
     print("Generating tabular data for visualization...")
-    tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, str(output_json))
+    tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, str(output_json), mapping_verification)
+    tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, str(output_json), mapping_verification)
 
 if __name__ == "__main__":
     main()
