@@ -20,12 +20,13 @@ import subprocess
 import argparse
 import sys
 
-# Import pysam which is required for BAM analysis
+# Try to import pysam, but handle gracefully if it fails
 try:
     import pysam
+    PYSAM_AVAILABLE = True
 except ImportError as e:
-    print(f"Error: pysam must be installed to analyze BAM files. ({e})")
-    sys.exit(1)
+    print(f"Warning: pysam not available ({e}). BAM analysis will be skipped.")
+    PYSAM_AVAILABLE = False
 
 def load_vcf_data(jl_file):
     """Load VCF data from joblib file."""
@@ -965,6 +966,8 @@ def main():
     parser.add_argument('--output-prefix', default='nova', help='Output file prefix (default: nova)')
     parser.add_argument('--original-bam', default='tests/test_data/test_reads.bam', 
                        help='Path to original BAM file (default: tests/test_data/test_reads.bam)')
+    parser.add_argument('--disable-mapping-verification', action='store_true',
+                       help='Disable mapping location verification for true positive refinement')
     
     args = parser.parse_args()
     
@@ -1003,7 +1006,13 @@ def main():
         return
     
     print("Verifying mapping locations...")
-    mapping_verification = verify_mapping_locations(nova_variants, str(insertions_json), str(modified_bam))
+    mapping_verification = None
+    if not args.disable_mapping_verification and PYSAM_AVAILABLE:
+        mapping_verification = verify_mapping_locations(nova_variants, str(insertions_json), str(modified_bam))
+    elif args.disable_mapping_verification:
+        print("Mapping verification disabled by user")
+    else:
+        print("Warning: pysam not available, skipping mapping verification")
     
     print("Categorizing variants...")
     categories = categorize_variants(nova_variants, mapping_verification)
