@@ -712,7 +712,7 @@ def generate_summary_report(nova_variants, categories, type_detection, insertion
         print(f"   With genomic clustering: {fp_summary['with_genomic_clustering']} ({fp_summary['clustering_rate']:.1f}%)")
         print(f"   With identical sequences: {fp_summary['with_identical_sequences']} ({fp_summary['identical_sequence_rate']:.1f}%)")
 
-def save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, fp_analysis, output_file):
+def save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, fp_analysis, output_file, mapping_verification):
     """Save variant data in tabular format for advanced visualizations."""
     
     # Create variant-level records with all categorical information
@@ -938,8 +938,7 @@ def main():
     mapping_verification = verify_mapping_locations(nova_variants, str(insertions_json), str(modified_bam))
     
     print("Categorizing variants...")
-    categories = categorize_variants(nova_variants, mapping_verification)
-    categories = categorize_variants(nova_variants, mapping_verification)
+    categories = categorize_variants(nova_variants)
     
     print("Analyzing insertion types...")
     type_detection = analyze_insertion_types(nova_variants, insertions_json)
@@ -965,7 +964,7 @@ def main():
     # Save tabular data (primary output)
     print("Generating tabular data...")
     csv_file = output_dir / f"{args.output_prefix}_analysis.csv"
-    tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, fp_analysis, str(csv_file))
+    tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, fp_analysis, str(csv_file), mapping_verification)
     
     # Generate lightweight summary JSON from CSV data
     print("Generating summary JSON...")
