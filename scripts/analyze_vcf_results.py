@@ -1006,6 +1006,7 @@ def main():
     
     print("Categorizing variants...")
     categories = categorize_variants(nova_variants, mapping_verification)
+    categories = categorize_variants(nova_variants, mapping_verification)
     
     print("Analyzing insertion types...")
     type_detection = analyze_insertion_types(nova_variants, insertions_json)
@@ -1023,6 +1024,7 @@ def main():
     
     # Save tabular data for advanced visualizations
     print("Generating tabular data for visualization...")
+    tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, str(output_json), mapping_verification)
     tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, str(output_json), mapping_verification)
 
 if __name__ == "__main__":
