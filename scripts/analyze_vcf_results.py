@@ -20,13 +20,11 @@ import subprocess
 import argparse
 import sys
 
-# Try to import pysam, but handle gracefully if it fails
 try:
     import pysam
-    PYSAM_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: pysam not available ({e}). BAM analysis will be skipped.")
-    PYSAM_AVAILABLE = False
+    print(f"Error: pysam is required to analyze BAM files. ({e})")
+    sys.exit(1)
 
 def load_vcf_data(jl_file):
     """Load VCF data from joblib file."""
@@ -100,7 +98,7 @@ def categorize_variants(nova_variants, mapping_verification=None):
     Args:
         nova_variants: List of variants containing nova reads
         mapping_verification: Optional dict mapping read names to mapping status.
-                            If provided, enables refined true positive categorization.
+                            If provided, enables true positive categorization.
     """
     categories = {
         'by_svtype': defaultdict(int),
@@ -472,11 +470,15 @@ def compare_insertion_sizes(nova_variants, insertions_file):
                     # Calculate size accuracy
                     size_diff = abs(generated_size - variant_svlen)
                     size_ratio = min(generated_size, variant_svlen) / max(generated_size, variant_svlen) if max(generated_size, variant_svlen) > 0 else 0
+                    size_accuracy = None
                     
                     # Categorize accuracy
-                    exact_match = (size_diff == 0)
-                    close_match = (size_diff <= 10)  # Within 10bp
-                    reasonable_match = (size_ratio >= 0.8)  # Within 20% of each other
+                    if size_diff == 0:
+                        size_accuracy = 'exact'
+                    elif size_diff <= 10:
+                        size_accuracy = 'close'
+                    elif size_ratio >= 0.8:
+                        size_accuracy = 'reasonable'
                     
                     size_comparisons.append({
                         'variant_index': variant['index'],
@@ -485,9 +487,7 @@ def compare_insertion_sizes(nova_variants, insertions_file):
                         'variant_svlen': variant_svlen,
                         'size_diff': size_diff,
                         'size_ratio': size_ratio,
-                        'exact_match': exact_match,
-                        'close_match': close_match,
-                        'reasonable_match': reasonable_match,
+                        'size_accuracy': size_accuracy,
                         'insertion_type': read_to_insertion_type.get(nova_read_name, 'unknown')
                     })
         
@@ -565,17 +565,17 @@ def generate_summary_report(nova_variants, categories, type_detection, alignment
         unknown_mapping = single_calls['single_nova_only_unknown_mapping']
         total_single_calls = single_calls['single_nova_only_total']
         
-        refined_true_positives = correct_mapping
+        true_positives = correct_mapping
         mapping_errors = incorrect_mapping
         unknown_mapping_status = unknown_mapping
         false_positives = total_variants - total_single_calls
         
-        refined_tp_rate = (refined_true_positives / total_expected * 100) if total_expected > 0 else 0
+        true_positive_rate = (true_positives / total_expected * 100) if total_expected > 0 else 0
         mapping_error_rate = (mapping_errors / total_single_calls * 100) if total_single_calls > 0 else 0
         
         print(f"   Total variants detected: {total_variants}")
         print(f"   Single nova-only calls: {total_single_calls}")
-        print(f"     - Correct mapping (refined true positives): {correct_mapping} ({refined_tp_rate:.1f}%)")
+        print(f"     - Correct mapping (true positives): {correct_mapping} ({true_positive_rate:.1f}%)")
         print(f"     - Incorrect mapping (mapping errors): {incorrect_mapping} ({mapping_error_rate:.1f}%)")
         print(f"     - Unknown mapping status: {unknown_mapping}")
         print(f"   False positives (multi-read/mixed): {false_positives}")
@@ -637,9 +637,9 @@ def generate_summary_report(nova_variants, categories, type_detection, alignment
     if size_comparisons:
         print("\n9. INSERTION SIZE ANALYSIS:")
         total_size_comparisons = len(size_comparisons)
-        exact_matches = sum(1 for c in size_comparisons if c['exact_match'])
-        close_matches = sum(1 for c in size_comparisons if c['close_match'])
-        reasonable_matches = sum(1 for c in size_comparisons if c['reasonable_match'])
+        exact_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'exact')
+        close_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'close')
+        reasonable_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'reasonable')
         
         exact_rate = (exact_matches / total_size_comparisons * 100) if total_size_comparisons > 0 else 0
         close_rate = (close_matches / total_size_comparisons * 100) if total_size_comparisons > 0 else 0
@@ -731,9 +731,9 @@ def save_detailed_results(nova_variants, categories, type_detection, alignment_c
     size_stats = {}
     if size_comparisons:
         total_size_comparisons = len(size_comparisons)
-        exact_matches = sum(1 for c in size_comparisons if c['exact_match'])
-        close_matches = sum(1 for c in size_comparisons if c['close_match'])
-        reasonable_matches = sum(1 for c in size_comparisons if c['reasonable_match'])
+        exact_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'exact')
+        close_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'close')
+        reasonable_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'reasonable')
         
         size_diffs = [c['size_diff'] for c in size_comparisons]
         size_ratios = [c['size_ratio'] for c in size_comparisons]
@@ -766,11 +766,11 @@ def save_detailed_results(nova_variants, categories, type_detection, alignment_c
                 size_by_type[ins_type] = {'exact': 0, 'close': 0, 'reasonable': 0, 'total': 0}
             
             size_by_type[ins_type]['total'] += 1
-            if comp['exact_match']:
+            if comp['size_accuracy'] == 'exact':
                 size_by_type[ins_type]['exact'] += 1
-            if comp['close_match']:
+            if comp['size_accuracy'] == 'close':
                 size_by_type[ins_type]['close'] += 1
-            if comp['reasonable_match']:
+            if comp['size_accuracy'] == 'reasonable':
                 size_by_type[ins_type]['reasonable'] += 1
         
         size_stats['by_insertion_type'] = size_by_type
@@ -920,9 +920,7 @@ def save_tabular_data(nova_variants, categories, type_detection, alignment_compa
                     'generated_size': size_comp['generated_size'],
                     'size_difference': size_comp['size_diff'],
                     'size_ratio': size_comp['size_ratio'],
-                    'exact_size_match': size_comp['exact_match'],
-                    'close_size_match': size_comp['close_match'],
-                    'reasonable_size_match': size_comp['reasonable_match']
+                    'size_accuracy': size_comp['size_accuracy']
                 })
                 variant_records.append(record)
         else:
@@ -966,9 +964,7 @@ def main():
     parser.add_argument('--output-prefix', default='nova', help='Output file prefix (default: nova)')
     parser.add_argument('--original-bam', default='tests/test_data/test_reads.bam', 
                        help='Path to original BAM file (default: tests/test_data/test_reads.bam)')
-    parser.add_argument('--disable-mapping-verification', action='store_true',
-                       help='Disable mapping location verification for true positive refinement')
-    
+
     args = parser.parse_args()
     
     # Construct file paths using provided output directory
@@ -1006,13 +1002,7 @@ def main():
         return
     
     print("Verifying mapping locations...")
-    mapping_verification = None
-    if not args.disable_mapping_verification and PYSAM_AVAILABLE:
-        mapping_verification = verify_mapping_locations(nova_variants, str(insertions_json), str(modified_bam))
-    elif args.disable_mapping_verification:
-        print("Mapping verification disabled by user")
-    else:
-        print("Warning: pysam not available, skipping mapping verification")
+    mapping_verification = verify_mapping_locations(nova_variants, str(insertions_json), str(modified_bam))
     
     print("Categorizing variants...")
     categories = categorize_variants(nova_variants, mapping_verification)
