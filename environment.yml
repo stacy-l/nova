@@ -5,6 +5,7 @@ channels:
   - defaults
 dependencies:
   - python>=3.8
+  - setuptools==80.9.0 # note: flagged for deprecation, dependency of pyranges
   - pysam>=0.19.0
   - bedtools>=2.30.0
   - numpy>=1.20.0

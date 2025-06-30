@@ -17,10 +17,8 @@ rule all:
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_statistics.json",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.jl",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.jl",
-        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_variant_analysis.json",
-        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_variant_analysis_tabular.csv",
-        f"{OUTPUT_DIR}/false_positives_analysis.json",
-        f"{OUTPUT_DIR}/false_positives_tabular.csv"
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary.json",
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis.csv"
 
 rule simulate_variant_reads:
     input:
@@ -199,8 +197,8 @@ rule analyze_vcf_results:
         "scripts/analyze_vcf_results.py",
         vcf=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz"
     output:
-        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_variant_analysis.json",
-        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_variant_analysis_tabular.csv"
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary.json",
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis.csv"
     conda:
         "nova"
     threads: 1
@@ -209,21 +207,4 @@ rule analyze_vcf_results:
     shell:
         """
         python scripts/analyze_vcf_results.py {params.outdir}
-        """
-
-rule analyze_false_positives:
-    input:
-        "scripts/analyze_false_positives.py",
-        vcf=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_variant_analysis_tabular.csv"
-    output:
-        f"{OUTPUT_DIR}/false_positives_analysis.json",
-        f"{OUTPUT_DIR}/false_positives_tabular.csv"
-    conda:
-        "nova"
-    threads: 1
-    params:
-        outdir = config["output_dir"],
-    shell:
-        """
-        python scripts/analyze_false_positives.py {params.outdir}
         """

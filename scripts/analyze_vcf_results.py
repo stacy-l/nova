@@ -13,7 +13,7 @@ import numpy as np
 from pathlib import Path
 import json
 import joblib
-from collections import defaultdict
+from collections import defaultdict, Counter
 import matplotlib.pyplot as plt
 import seaborn as sns
 import subprocess
@@ -93,98 +93,60 @@ def identify_nova_variants(df):
     print(f"Found {len(nova_variants)} variants with nova reads!")
     return nova_variants
 
+def categorize_variant(variant):
+    """Categorize a single variant and return all its categories."""
+    support_reads = variant['support_reads']
+    nova_reads = variant['nova_reads']
+    nova_fraction = nova_reads / support_reads
+    
+    # Simplified read composition - only 3 categories
+    if support_reads == 1 and nova_reads == 1:
+        composition = 'single_nova_only'
+    elif nova_fraction >= 0.5:
+        composition = 'majority_nova'
+    else:
+        composition = 'minority_nova'
+    
+    # Support level
+    support = variant['SUPPORT']
+    if support <= 2:
+        support_level = 'Low (1-2)'
+    elif support <= 5:
+        support_level = 'Medium (3-5)'
+    else:
+        support_level = 'High (6+)'
+    
+    return {
+        'svtype': variant['SVTYPE'],
+        'precision': 'PRECISE' if variant['PRECISE'] else 'IMPRECISE',
+        'support_level': support_level,
+        'composition': composition,
+        'nova_fraction': nova_fraction,
+        'is_single_nova_only': composition == 'single_nova_only'
+    }
+
 def categorize_variants(nova_variants):
     """Categorize variants by type, precision, and support."""
     categories = {
         'by_svtype': defaultdict(int),
         'by_precision': defaultdict(int),
         'by_support_level': defaultdict(int),
-        'by_nova_fraction': defaultdict(int),
-        'by_read_composition': defaultdict(int),
+        'by_composition': defaultdict(int),
         'single_read_calls': {'single_nova_only': 0, 'total_variants': len(nova_variants)}
     }
     
-    # Detailed read support breakdown
-    support_breakdown = defaultdict(lambda: {'total': 0, 'all_nova': 0, 'mixed': 0})
-    
     for variant in nova_variants:
-        # By SVTYPE
-        svtype = variant['SVTYPE']
-        categories['by_svtype'][svtype] += 1
+        cat = categorize_variant(variant)
         
-        # By precision
-        precision = 'PRECISE' if variant['PRECISE'] else 'IMPRECISE'
-        categories['by_precision'][precision] += 1
+        # Increment counters
+        categories['by_svtype'][cat['svtype']] += 1
+        categories['by_precision'][cat['precision']] += 1
+        categories['by_support_level'][cat['support_level']] += 1
+        categories['by_composition'][cat['composition']] += 1
         
-        # By support level
-        support = variant['SUPPORT']
-        if support <= 2:
-            support_level = 'Low (1-2)'
-        elif support <= 5:
-            support_level = 'Medium (3-5)'
-        else:
-            support_level = 'High (6+)'
-        categories['by_support_level'][support_level] += 1
-        
-        # By nova read fraction
-        nova_fraction = variant['nova_reads'] / variant['support_reads']
-        if nova_fraction == 1.0:
-            fraction_level = 'All nova'
-        elif nova_fraction >= 0.5:
-            fraction_level = 'Majority nova'
-        else:
-            fraction_level = 'Minority nova'
-        categories['by_nova_fraction'][fraction_level] += 1
-        
-        # Detailed read composition analysis
-        support_reads = variant['support_reads']
-        nova_reads = variant['nova_reads']
-        non_nova_reads = support_reads - nova_reads
-        
-        # Track successful calls (single nova read, no other reads)
-        if support_reads == 1 and nova_reads == 1:
+        if cat['is_single_nova_only']:
             categories['single_read_calls']['single_nova_only'] += 1
-        
-        # Read composition categories
-        if support_reads == 1:
-            if nova_reads == 1:
-                categories['by_read_composition']['1_nova_only'] += 1
-            else:
-                categories['by_read_composition']['1_non_nova_only'] += 1
-        elif support_reads == 2:
-            if nova_reads == 2:
-                categories['by_read_composition']['2_nova_only'] += 1
-            elif nova_reads == 1:
-                categories['by_read_composition']['2_mixed_1nova_1other'] += 1
-            else:
-                categories['by_read_composition']['2_non_nova_only'] += 1
-        elif support_reads == 3:
-            if nova_reads == 3:
-                categories['by_read_composition']['3_nova_only'] += 1
-            elif nova_reads == 2:
-                categories['by_read_composition']['3_mixed_2nova_1other'] += 1
-            elif nova_reads == 1:
-                categories['by_read_composition']['3_mixed_1nova_2other'] += 1
-            else:
-                categories['by_read_composition']['3_non_nova_only'] += 1
-        else:
-            # 4+ reads
-            if nova_reads == support_reads:
-                categories['by_read_composition'][f'{support_reads}_all_nova'] += 1
-            elif nova_reads >= support_reads / 2:
-                categories['by_read_composition'][f'{support_reads}_majority_nova'] += 1
-            else:
-                categories['by_read_composition'][f'{support_reads}_minority_nova'] += 1
-        
-        # Support breakdown for detailed analysis
-        support_key = str(support)
-        support_breakdown[support_key]['total'] += 1
-        if nova_reads == support_reads:
-            support_breakdown[support_key]['all_nova'] += 1
-        else:
-            support_breakdown[support_key]['mixed'] += 1
     
-    categories['support_breakdown'] = dict(support_breakdown)
     return categories
 
 def analyze_insertion_types(nova_variants, insertions_file):
@@ -374,17 +336,136 @@ def compare_insertion_sizes(nova_variants, insertions_file):
         print(f"Error comparing insertion sizes: {e}")
         return []
 
-def load_expected_counts(statistics_file):
-    """Load expected counts from statistics file."""
-    try:
-        with open(statistics_file, 'r') as f:
-            stats = json.load(f)
-        return stats['insertion_statistics']['type_counts']
-    except Exception as e:
-        print(f"Warning: Could not load statistics file {statistics_file}: {e}")
-        return {}
+def create_insertion_lookup(insertions_data):
+    """Create lookup dictionary for insertion metadata."""
+    read_to_insertion = {}
+    
+    for insertion in insertions_data:
+        read_name = insertion.get('modified_read_name', '')
+        if read_name:
+            read_to_insertion[read_name] = {
+                'insertion_type': insertion.get('insertion_type', 'unknown'),
+                'insertion_id': insertion.get('insertion_id', ''),
+                'insertion_length': insertion.get('insertion_length', 0),
+                'original_chr': insertion.get('original_chr', ''),
+                'original_pos': insertion.get('original_pos', 0),
+                'base_read_name': insertion.get('base_read_name', '')
+            }
+    
+    return read_to_insertion
 
-def generate_summary_report(nova_variants, categories, type_detection, alignment_comparisons=None, size_comparisons=None):
+def analyze_false_positives(nova_variants, read_to_insertion):
+    """Analyze false positive variants and their patterns."""
+    
+    # Separate successful calls from false positives
+    successful_calls = []
+    false_positives = []
+    
+    for variant in nova_variants:
+        cat = categorize_variant(variant)
+        if cat['is_single_nova_only']:
+            successful_calls.append(variant)
+        else:
+            false_positives.append(variant)
+    
+    print(f"\nFalse Positive Analysis:")
+    print(f"  Successful calls (single nova only): {len(successful_calls)}")
+    print(f"  False positives: {len(false_positives)}")
+    
+    if not false_positives:
+        return {'false_positives': [], 'patterns': {}, 'summary': {}}
+    
+    # Analyze patterns in false positives
+    fp_patterns = {}
+    category_counts = Counter()
+    
+    for variant in false_positives:
+        variant_idx = variant['index']
+        cat = categorize_variant(variant)
+        category_counts[cat['composition']] += 1
+        
+        # Analyze sequence patterns for this variant
+        nova_reads = variant['nova_read_names']
+        insertion_details = []
+        
+        for read_name in nova_reads:
+            if read_name in read_to_insertion:
+                details = read_to_insertion[read_name].copy()
+                details['read_name'] = read_name
+                insertion_details.append(details)
+        
+        # Pattern analysis
+        insertion_types = [d['insertion_type'] for d in insertion_details]
+        insertion_ids = [d['insertion_id'] for d in insertion_details]
+        original_positions = [(d['original_chr'], d['original_pos']) for d in insertion_details]
+        
+        # Check for patterns
+        type_counts = Counter(insertion_types)
+        id_counts = Counter(insertion_ids)
+        has_duplicate_types = any(count > 1 for count in type_counts.values())
+        has_identical_sequences = any(count > 1 for count in id_counts.values())
+        
+        # Check for genomic clustering (within 5kb)
+        has_genomic_clustering = False
+        position_clusters = defaultdict(list)
+        for i, (chrom, pos) in enumerate(original_positions):
+            position_clusters[chrom].append(pos)
+        
+        for chrom, positions in position_clusters.items():
+            if len(positions) > 1:
+                positions.sort()
+                for i in range(len(positions) - 1):
+                    if abs(positions[i+1] - positions[i]) <= 5000:
+                        has_genomic_clustering = True
+                        break
+        
+        fp_patterns[variant_idx] = {
+            'composition': cat['composition'],
+            'nova_reads': variant['nova_reads'],
+            'support_reads': variant['support_reads'],
+            'insertion_types': insertion_types,
+            'has_duplicate_types': has_duplicate_types,
+            'has_identical_sequences': has_identical_sequences,
+            'has_genomic_clustering': has_genomic_clustering,
+            'num_unique_types': len(type_counts),
+            'num_unique_sequences': len(id_counts)
+        }
+    
+    # Summary statistics
+    total_fps = len(false_positives)
+    clustering_fps = sum(1 for p in fp_patterns.values() if p['has_genomic_clustering'])
+    identical_seq_fps = sum(1 for p in fp_patterns.values() if p['has_identical_sequences'])
+    
+    summary = {
+        'total_false_positives': total_fps,
+        'by_composition': dict(category_counts),
+        'with_genomic_clustering': clustering_fps,
+        'with_identical_sequences': identical_seq_fps,
+        'clustering_rate': (clustering_fps / total_fps * 100) if total_fps > 0 else 0,
+        'identical_sequence_rate': (identical_seq_fps / total_fps * 100) if total_fps > 0 else 0
+    }
+    
+    print(f"  False positive composition: {dict(category_counts)}")
+    print(f"  With genomic clustering: {clustering_fps} ({summary['clustering_rate']:.1f}%)")
+    print(f"  With identical sequences: {identical_seq_fps} ({summary['identical_sequence_rate']:.1f}%)")
+    
+    return {
+        'false_positives': false_positives,
+        'patterns': fp_patterns,
+        'summary': summary
+    }
+
+def calculate_expected_counts(insertions_data):
+    """Calculate expected counts directly from insertions data."""
+    type_counts = Counter()
+    
+    for insertion in insertions_data:
+        insertion_type = insertion.get('insertion_type', 'unknown')
+        type_counts[insertion_type] += 1
+    
+    return dict(type_counts)
+
+def generate_summary_report(nova_variants, categories, type_detection, insertions_data, alignment_comparisons=None, size_comparisons=None, fp_analysis=None):
     """Generate a comprehensive summary report."""
     print("\n" + "="*60)
     print("NOVA VARIANT DETECTION ANALYSIS")
@@ -392,11 +473,10 @@ def generate_summary_report(nova_variants, categories, type_detection, alignment
     
     print(f"\nTotal variants with nova reads: {len(nova_variants)}")
     
-    # Load actual expected counts from statistics
-    statistics_file = "output/nova_statistics.json"
-    expected_counts = load_expected_counts(statistics_file)
+    # Calculate expected counts from insertions data
+    expected_counts = calculate_expected_counts(insertions_data)
     
-    print("\n1. TRUE POSITIVE ANALYSIS (Single Nova-Only Calls):")
+    print("\n1. TRUE POSITIVE ANALYSIS (Single nova-Only Calls):")
     total_expected = 0
     total_single_nova_calls = 0
     unique_nova_reads = set()
@@ -440,35 +520,28 @@ def generate_summary_report(nova_variants, categories, type_detection, alignment
     print(f"   False positives (multi-read/mixed): {false_positives} ({false_positive_rate:.1f}%)")
     
     print("\n3. READ COMPOSITION BREAKDOWN:")
-    for comp_type, count in sorted(categories['by_read_composition'].items()):
+    for comp_type, count in sorted(categories['by_composition'].items()):
         print(f"   {comp_type}: {count}")
     
-    print("\n4. SUPPORT BREAKDOWN (by number of reads):")
-    for support_level, breakdown in sorted(categories['support_breakdown'].items(), key=lambda x: int(x[0])):
-        total = breakdown['total']
-        all_nova = breakdown['all_nova']
-        mixed = breakdown['mixed']
-        print(f"   {support_level} reads: {total} variants ({all_nova} all-nova, {mixed} mixed)")
-    
-    print("\n5. VARIANT TYPES (SVTYPE):")
+    print("\n4. VARIANT TYPES (SVTYPE):")
     for svtype, count in sorted(categories['by_svtype'].items()):
         print(f"   {svtype}: {count}")
     
-    print("\n6. PRECISION:")
+    print("\n5. PRECISION:")
     for precision, count in sorted(categories['by_precision'].items()):
         print(f"   {precision}: {count}")
     
     # Detailed statistics
-    print("\n7. DETAILED STATISTICS:")
+    print("\n6. DETAILED STATISTICS:")
     supports = [v['SUPPORT'] for v in nova_variants]
     nova_fractions = [v['nova_reads']/v['support_reads'] for v in nova_variants]
     
     print(f"   Support reads - Mean: {np.mean(supports):.1f}, Median: {np.median(supports):.1f}")
-    print(f"   Nova fraction - Mean: {np.mean(nova_fractions):.2f}, Median: {np.median(nova_fractions):.2f}")
+    print(f"   nova fraction - Mean: {np.mean(nova_fractions):.2f}, Median: {np.median(nova_fractions):.2f}")
     
     # Alignment position analysis
     if alignment_comparisons:
-        print("\n8. ALIGNMENT POSITION ANALYSIS:")
+        print("\n7. ALIGNMENT POSITION ANALYSIS:")
         total_comparisons = len(alignment_comparisons)
         position_matches = sum(1 for c in alignment_comparisons if c['position_match'])
         match_rate = (position_matches / total_comparisons * 100) if total_comparisons > 0 else 0
@@ -484,7 +557,7 @@ def generate_summary_report(nova_variants, categories, type_detection, alignment
     
     # Size comparison analysis
     if size_comparisons:
-        print("\n9. INSERTION SIZE ANALYSIS:")
+        print("\n8. INSERTION SIZE ANALYSIS:")
         total_size_comparisons = len(size_comparisons)
         exact_matches = sum(1 for c in size_comparisons if c['exact_match'])
         close_matches = sum(1 for c in size_comparisons if c['close_match'])
@@ -507,179 +580,17 @@ def generate_summary_report(nova_variants, categories, type_detection, alignment
             print(f"   Size difference - Mean: {np.mean(size_diffs):.1f}bp, Median: {np.median(size_diffs):.1f}bp")
         if size_ratios:
             print(f"   Size ratio - Mean: {np.mean(size_ratios):.2f}, Median: {np.median(size_ratios):.2f}")
+    
+    # False positive analysis summary
+    if fp_analysis:
+        print("\n9. FALSE POSITIVE ANALYSIS:")
+        fp_summary = fp_analysis['summary']
+        print(f"   Total false positives: {fp_summary['total_false_positives']}")
+        print(f"   Composition breakdown: {fp_summary['by_composition']}")
+        print(f"   With genomic clustering: {fp_summary['with_genomic_clustering']} ({fp_summary['clustering_rate']:.1f}%)")
+        print(f"   With identical sequences: {fp_summary['with_identical_sequences']} ({fp_summary['identical_sequence_rate']:.1f}%)")
 
-def save_detailed_results(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, output_file, statistics_file):
-    """Save comprehensive analysis results to structured JSON."""
-    
-    # Calculate summary statistics
-    expected_counts = load_expected_counts(statistics_file)
-    
-    # Calculate cleaner metrics - True Positive Rates and Nova Read Utilization
-    true_positive_rates = {}
-    nova_read_utilization = {}
-    detection_quality = {}
-    total_expected = 0
-    total_single_nova_calls = 0
-    total_variants_detected = len(nova_variants)
-    unique_nova_reads = set()
-    
-    # Collect all unique nova reads that were detected
-    for variant in nova_variants:
-        for read_name in variant.get('nova_read_names', []):
-            unique_nova_reads.add(read_name)
-    
-    for ins_type in sorted(expected_counts.keys()):
-        expected = expected_counts[ins_type]
-        total_expected += expected
-        
-        # Count single nova-only calls for this insertion type
-        type_variants = type_detection.get(ins_type, [])
-        single_nova_calls = sum(1 for v in type_variants if v.get('support_reads', 0) == 1 and v.get('nova_reads', 0) == 1)
-        total_single_nova_calls += single_nova_calls
-        
-        # Count unique nova reads for this type
-        type_unique_reads = set()
-        for variant in type_variants:
-            for read_name in variant.get('nova_read_names', []):
-                type_unique_reads.add(read_name)
-        
-        # Calculate metrics
-        true_positive_rate = (single_nova_calls / expected * 100) if expected > 0 else 0
-        read_utilization_rate = (len(type_unique_reads) / expected * 100) if expected > 0 else 0
-        type_quality = (single_nova_calls / len(type_variants) * 100) if len(type_variants) > 0 else 0
-        
-        true_positive_rates[ins_type] = {
-            'expected_insertions': expected,
-            'single_nova_calls': single_nova_calls,
-            'true_positive_rate': true_positive_rate,
-            'total_variants_detected': len(type_variants),
-            'unique_nova_reads_detected': len(type_unique_reads),
-            'read_utilization_rate': read_utilization_rate,
-            'detection_quality': type_quality
-        }
-    
-    # Alignment statistics
-    alignment_stats = {}
-    if alignment_comparisons:
-        total_alignments = len(alignment_comparisons)
-        position_matches = sum(1 for c in alignment_comparisons if c['position_match'])
-        same_chrom_diffs = [c['position_diff'] for c in alignment_comparisons if c['position_diff'] is not None]
-        
-        alignment_stats = {
-            'total_comparisons': total_alignments,
-            'position_matches': position_matches,
-            'match_rate': (position_matches / total_alignments * 100) if total_alignments > 0 else 0,
-            'position_differences': {
-                'mean': float(np.mean(same_chrom_diffs)) if same_chrom_diffs else 0,
-                'median': float(np.median(same_chrom_diffs)) if same_chrom_diffs else 0,
-                'values': same_chrom_diffs[:100]  # Save first 100 for plotting
-            }
-        }
-    
-    # Size comparison statistics
-    size_stats = {}
-    if size_comparisons:
-        total_size_comparisons = len(size_comparisons)
-        exact_matches = sum(1 for c in size_comparisons if c['exact_match'])
-        close_matches = sum(1 for c in size_comparisons if c['close_match'])
-        reasonable_matches = sum(1 for c in size_comparisons if c['reasonable_match'])
-        
-        size_diffs = [c['size_diff'] for c in size_comparisons]
-        size_ratios = [c['size_ratio'] for c in size_comparisons]
-        
-        size_stats = {
-            'total_comparisons': total_size_comparisons,
-            'exact_matches': exact_matches,
-            'close_matches': close_matches,
-            'reasonable_matches': reasonable_matches,
-            'exact_rate': (exact_matches / total_size_comparisons * 100) if total_size_comparisons > 0 else 0,
-            'close_rate': (close_matches / total_size_comparisons * 100) if total_size_comparisons > 0 else 0,
-            'reasonable_rate': (reasonable_matches / total_size_comparisons * 100) if total_size_comparisons > 0 else 0,
-            'size_differences': {
-                'mean': float(np.mean(size_diffs)) if size_diffs else 0,
-                'median': float(np.median(size_diffs)) if size_diffs else 0,
-                'values': size_diffs[:100]  # Save first 100 for plotting
-            },
-            'size_ratios': {
-                'mean': float(np.mean(size_ratios)) if size_ratios else 0,
-                'median': float(np.median(size_ratios)) if size_ratios else 0,
-                'values': size_ratios[:100]  # Save first 100 for plotting
-            }
-        }
-        
-        # Size accuracy by insertion type
-        size_by_type = {}
-        for comp in size_comparisons:
-            ins_type = comp['insertion_type']
-            if ins_type not in size_by_type:
-                size_by_type[ins_type] = {'exact': 0, 'close': 0, 'reasonable': 0, 'total': 0}
-            
-            size_by_type[ins_type]['total'] += 1
-            if comp['exact_match']:
-                size_by_type[ins_type]['exact'] += 1
-            if comp['close_match']:
-                size_by_type[ins_type]['close'] += 1
-            if comp['reasonable_match']:
-                size_by_type[ins_type]['reasonable'] += 1
-        
-        size_stats['by_insertion_type'] = size_by_type
-    
-    # Support statistics
-    supports = [v['SUPPORT'] for v in nova_variants]
-    nova_fractions = [v['nova_reads']/v['support_reads'] for v in nova_variants]
-    
-    # Calculate overall metrics
-    overall_true_positive_rate = (total_single_nova_calls / total_expected * 100) if total_expected > 0 else 0
-    overall_read_utilization = (len(unique_nova_reads) / total_expected * 100) if total_expected > 0 else 0
-    overall_detection_quality = (total_single_nova_calls / total_variants_detected * 100) if total_variants_detected > 0 else 0
-    false_positive_count = total_variants_detected - total_single_nova_calls
-    false_positive_rate = (false_positive_count / total_variants_detected * 100) if total_variants_detected > 0 else 0
-
-    output_data = {
-        'metadata': {
-            'analysis_timestamp': pd.Timestamp.now().isoformat(),
-            'total_nova_variants': len(nova_variants),
-            'total_expected_insertions': total_expected,
-            'total_single_nova_calls': total_single_nova_calls,
-            'unique_nova_reads_detected': len(unique_nova_reads),
-            'overall_true_positive_rate': overall_true_positive_rate,
-            'overall_read_utilization_rate': overall_read_utilization,
-            'overall_detection_quality': overall_detection_quality,
-            'false_positive_count': false_positive_count,
-            'false_positive_rate': false_positive_rate
-        },
-        'true_positive_analysis': true_positive_rates,
-        'variant_categories': {
-            'by_svtype': dict(categories['by_svtype']),
-            'by_precision': dict(categories['by_precision']),
-            'by_support_level': dict(categories['by_support_level']),
-            'by_nova_fraction': dict(categories['by_nova_fraction']),
-            'by_read_composition': dict(categories['by_read_composition']),
-            'support_breakdown': categories['support_breakdown']
-        },
-        'single_read_calls': categories['single_read_calls'],
-        'alignment_analysis': alignment_stats,
-        'size_analysis': size_stats,
-        'summary_statistics': {
-            'support_reads': {
-                'mean': float(np.mean(supports)) if supports else 0,
-                'median': float(np.median(supports)) if supports else 0,
-                'values': supports[:100]  # First 100 for plotting
-            },
-            'nova_fractions': {
-                'mean': float(np.mean(nova_fractions)) if nova_fractions else 0,
-                'median': float(np.median(nova_fractions)) if nova_fractions else 0,
-                'values': nova_fractions[:100]  # First 100 for plotting
-            }
-        }
-    }
-    
-    with open(output_file, 'w') as f:
-        json.dump(output_data, f, indent=2)
-    
-    print(f"\nStructured analysis results saved to: {output_file}")
-
-def save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, output_file):
+def save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, fp_analysis, output_file):
     """Save variant data in tabular format for advanced visualizations."""
     
     # Create variant-level records with all categorical information
@@ -698,7 +609,13 @@ def save_tabular_data(nova_variants, categories, type_detection, alignment_compa
     for variant in nova_variants:
         variant_idx = variant['index']
         
-        # Basic variant information
+        # Get unified categorization
+        cat = categorize_variant(variant)
+        
+        # Get false positive pattern data if available
+        fp_pattern = fp_analysis['patterns'].get(variant_idx, {}) if fp_analysis else {}
+        
+        # Basic variant information with unified categorization
         base_record = {
             'variant_index': variant_idx,
             'chrom': variant['CHROM'],
@@ -706,19 +623,20 @@ def save_tabular_data(nova_variants, categories, type_detection, alignment_compa
             'svtype': variant['SVTYPE'],
             'svlen': variant['SVLEN'],
             'precise': variant['PRECISE'],
-            'support_reads': variant['SUPPORT'],
             'support_reads': variant['support_reads'],
             'nova_reads': variant['nova_reads'],
-            'nova_fraction': variant['nova_reads'] / variant['support_reads'],
+            'nova_fraction': cat['nova_fraction'],
+            'composition': cat['composition'],
+            'support_level': cat['support_level'],
+            'precision_category': cat['precision'],
+            'is_single_nova_only': cat['is_single_nova_only'],
             
-            # Categorizations
-            'is_single_read_call': variant['support_reads'] == 1 and variant['nova_reads'] == 1,
-            'support_level': ('Low (1-2)' if variant['SUPPORT'] <= 2 else 
-                            'Medium (3-5)' if variant['SUPPORT'] <= 5 else 'High (6+)'),
-            'nova_fraction_category': ('All nova' if variant['nova_reads'] / variant['support_reads'] == 1.0 else
-                                     'Majority nova' if variant['nova_reads'] / variant['support_reads'] >= 0.5 else
-                                     'Minority nova'),
-            'precision_category': 'PRECISE' if variant['PRECISE'] else 'IMPRECISE'
+            # False positive pattern data
+            'has_genomic_clustering': fp_pattern.get('has_genomic_clustering', False),
+            'has_identical_sequences': fp_pattern.get('has_identical_sequences', False),
+            'has_duplicate_types': fp_pattern.get('has_duplicate_types', False),
+            'num_unique_types': fp_pattern.get('num_unique_types', 0),
+            'num_unique_sequences': fp_pattern.get('num_unique_sequences', 0)
         }
         
         # Add alignment information if available
@@ -780,16 +698,65 @@ def save_tabular_data(nova_variants, categories, type_detection, alignment_compa
     df = pd.DataFrame(variant_records)
     
     # Save as CSV
-    csv_file = output_file.replace('.json', '_tabular.csv')
-    df.to_csv(csv_file, index=False)
+    df.to_csv(output_file, index=False)
     
-    print(f"Tabular data saved to: {csv_file}")
+    print(f"CSV data saved to: {output_file}")
     print(f"Shape: {df.shape[0]} rows × {df.shape[1]} columns")
     
-    # Print sample of available columns for reference
-    print(f"Columns available for visualization: {', '.join(df.columns)}")
-    
     return df
+
+def generate_summary_json(df, expected_counts, fp_analysis, output_file):
+    """Generate a lightweight JSON summary from CSV data."""
+    total_variants = len(df)
+    single_nova_only = len(df[df['is_single_nova_only'] == True])
+    
+    # Basic metrics
+    composition_counts = df['composition'].value_counts().to_dict()
+    svtype_counts = df['svtype'].value_counts().to_dict()
+    precision_counts = df['precision_category'].value_counts().to_dict()
+    
+    # Calculate true positive rates by insertion type if available
+    type_performance = {}
+    if 'insertion_type' in df.columns:
+        for ins_type in expected_counts.keys():
+            type_df = df[df['insertion_type'] == ins_type]
+            if len(type_df) > 0:
+                tp_count = len(type_df[type_df['is_single_nova_only'] == True])
+                expected = expected_counts[ins_type]
+                type_performance[ins_type] = {
+                    'true_positives': tp_count,
+                    'expected': expected,
+                    'true_positive_rate': (tp_count / expected * 100) if expected > 0 else 0,
+                    'total_detected': len(type_df)
+                }
+    
+    # Overall metrics
+    total_expected = sum(expected_counts.values()) if expected_counts else 0
+    overall_tp_rate = (single_nova_only / total_expected * 100) if total_expected > 0 else 0
+    detection_quality = (single_nova_only / total_variants * 100) if total_variants > 0 else 0
+    
+    summary = {
+        'analysis_timestamp': pd.Timestamp.now().isoformat(),
+        'overall_metrics': {
+            'total_variants_detected': total_variants,
+            'true_positives': single_nova_only,
+            'false_positives': total_variants - single_nova_only,
+            'total_expected': total_expected,
+            'true_positive_rate': overall_tp_rate,
+            'detection_quality': detection_quality
+        },
+        'composition_breakdown': composition_counts,
+        'variant_types': svtype_counts,
+        'precision_breakdown': precision_counts,
+        'by_insertion_type': type_performance,
+        'false_positive_analysis': fp_analysis['summary'] if fp_analysis else {}
+    }
+    
+    with open(output_file, 'w') as f:
+        json.dump(summary, f, indent=2)
+    
+    print(f"Summary JSON saved to: {output_file}")
+    return summary
 
 def main():
     """Main analysis function."""
@@ -841,6 +808,15 @@ def main():
     print("Analyzing insertion types...")
     type_detection = analyze_insertion_types(nova_variants, insertions_json)
     
+    # Create insertion lookup for false positive analysis
+    print("Creating insertion lookup...")
+    with open(insertions_json, 'r') as f:
+        insertions_data = json.load(f)
+    read_to_insertion = create_insertion_lookup(insertions_data)
+    
+    print("Analyzing false positives...")
+    fp_analysis = analyze_false_positives(nova_variants, read_to_insertion)
+    
     print("Comparing alignment positions...")
     alignment_comparisons = compare_alignment_positions(nova_variants, insertions_json, original_bam, modified_bam)
     
@@ -848,13 +824,18 @@ def main():
     size_comparisons = compare_insertion_sizes(nova_variants, insertions_json)
     
     # Generate reports
-    statistics_json = output_dir / f"{args.output_prefix}_statistics.json"
-    generate_summary_report(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons)
-    save_detailed_results(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, str(output_json), str(statistics_json))
+    generate_summary_report(nova_variants, categories, type_detection, insertions_data, alignment_comparisons, size_comparisons, fp_analysis)
     
-    # Save tabular data for advanced visualizations
-    print("Generating tabular data for visualization...")
-    tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, str(output_json))
+    # Save tabular data (primary output)
+    print("Generating tabular data...")
+    csv_file = output_dir / f"{args.output_prefix}_analysis.csv"
+    tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, fp_analysis, str(csv_file))
+    
+    # Generate lightweight summary JSON from CSV data
+    print("Generating summary JSON...")
+    expected_counts = calculate_expected_counts(insertions_data)
+    summary_json = output_dir / f"{args.output_prefix}_analysis_summary.json"
+    generate_summary_json(tabular_df, expected_counts, fp_analysis, str(summary_json))
 
 if __name__ == "__main__":
     main()

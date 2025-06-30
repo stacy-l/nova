@@ -9,5 +9,7 @@ pyranges>=0.0.129
 click>=8.0.0
 pytest>=6.0.0
 pytest-cov>=2.12.0
+setuptools==80.9.0
 # Note: Bioinformatics CLI tools (samtools, bedtools, bcftools, minimap2) 
 # must be installed separately via conda environment.yml or system package manager
+# setuptools pinned as dependency of pyranges, but API is flagged for deprecation

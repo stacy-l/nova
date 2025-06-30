@@ -30,6 +30,12 @@ nova validate-config config.json
 - **`--min-read-length=10000`**: Minimum read length filter
 - **`--max-soft-clip-ratio=0.1`**: Maximum allowed soft clipping
 
+## General Guidelines
+
+- Think critically
+- Avoid "yes-man" behavior: raise concerns and potential pitfalls
+- Favor code cleanliness and conciseness: avoid over-engineering, consult with user when unsure
+
 → **Research findings**: [claude_docs/window_limit_experiments.md](claude_docs/window_limit_experiments.md)
 
 ## Documentation Map
@@ -98,7 +104,3 @@ python scripts/analyze_vcf_results.py --vcf results.vcf.gz --insertions nova_ins
 ## Environment Notes
 
 **Important**: If `which python` doesn't show the nova conda environment path, prompt the user to exit and run `conda activate nova` before proceeding.
-
-## Claude Behavior Notes
-
-The user relies on you to be a fellow researcher and collaborator. Note concerns and potential pitfalls of proposed approaches. Working thoughtfully is the best way to be helpful!
