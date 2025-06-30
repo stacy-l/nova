@@ -261,3 +261,11 @@ Nova follows a modular architecture designed for extensibility and clear separat
 - Read technology simulation
 - Quality score modeling
 - Coverage-aware selection
+
+## Related Code References
+
+### GenomicInterval Implementation
+For VCF annotation with genomic intervals, see the GenomicInterval and BEDProcessor classes in:
+`/Users/stacy/sudmant/vesper/src/vesper/`
+
+This implementation provides more comprehensive genomic interval operations including proximal and overlapping BED annotations, which may be useful for future Nova enhancements requiring complex genomic coordinate operations beyond the current region-targeting features.

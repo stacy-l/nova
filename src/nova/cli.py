@@ -13,6 +13,7 @@ from .variant_registry import VariantRegistry
 from .variant_generator import VariantGenerator
 from .read_selector import ReadSelector
 from .read_inserter import ReadInserter
+from .region_utils import RegionFilter, create_exclusion_filter_from_config
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -60,10 +61,15 @@ def cli(ctx, verbose):
               help='Random seed for reproducibility')
 @click.option('--max-reads-per-window', default=1, type=int,
               help='Maximum reads per genomic window (default: 1 for de novo simulation)')
+@click.option('--exclusion-regions', multiple=True, type=click.Path(exists=True),
+              help='BED files containing regions to exclude from simulation (can be specified multiple times)')
+@click.option('--disable-exclusion-regions', is_flag=True,
+              help='Disable exclusion region filtering (overrides any exclusion-regions specified)')
 @click.pass_context
 def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
              min_mapq, max_soft_clip_ratio, min_read_length, max_read_length,
-             min_distance_from_ends, random_seed, max_reads_per_window):
+             min_distance_from_ends, random_seed, max_reads_per_window,
+             exclusion_regions, disable_exclusion_regions):
     """
     Run de novo variant insertion simulation.
     Produces four output files:
@@ -97,32 +103,68 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
                 logger.error(f"  - {error}")
             sys.exit(1)
         
-        logger.info("Generating insertion sequences")
-        insertion_ids = generator.generate_from_config(config)
+        # Setup exclusion regions
+        exclusion_filter = None
+        if not disable_exclusion_regions and exclusion_regions:
+            logger.info(f"Loading exclusion regions from {len(exclusion_regions)} BED files")
+            exclusion_filter = create_exclusion_filter_from_config(list(exclusion_regions))
         
-        if not insertion_ids:
+        logger.info("Generating insertion sequences grouped by target regions")
+        region_groups = generator.generate_from_config_with_regions(config)
+        
+        if not region_groups:
             logger.error("No insertion sequences generated")
             sys.exit(1)
         
-        total_insertions = len(insertion_ids)
-        logger.info(f"Generated {total_insertions} insertion sequences")
-        read_selector = ReadSelector(
-            bam_file, min_mapq, max_soft_clip_ratio,
-            min_read_length, max_read_length, max_reads_per_window
-        )
+        total_insertions = sum(len(ids) for ids in region_groups.values())
+        logger.info(f"Generated {total_insertions} insertion sequences across {len(region_groups)} region groups")
         
-        logger.info(f"Selecting {total_insertions} reads from BAM file")
-        reads_with_metadata = read_selector.select_reads(total_insertions)
+        # Process each region group separately
+        all_reads_with_metadata = []
+        all_insertion_ids = []
         
-        if len(reads_with_metadata) < total_insertions:
-            logger.warning(f"Only found {len(reads_with_metadata)} suitable reads, "
-                         f"but need {total_insertions}")
-            insertion_ids = insertion_ids[:len(reads_with_metadata)]
+        for region_bed_path, insertion_ids in region_groups.items():
+            logger.info(f"Processing {len(insertion_ids)} insertions for region group: {region_bed_path}")
+            
+            # Setup target regions filter
+            target_filter = None
+            if region_bed_path != 'global':
+                try:
+                    target_filter = RegionFilter(bed_path=region_bed_path)
+                    logger.info(f"Loaded target regions from {region_bed_path}")
+                except Exception as e:
+                    logger.error(f"Failed to load target regions from {region_bed_path}: {e}")
+                    sys.exit(1)
+            
+            # Create ReadSelector for this region group
+            read_selector = ReadSelector(
+                bam_file, min_mapq, max_soft_clip_ratio,
+                min_read_length, max_read_length, max_reads_per_window,
+                target_regions=target_filter, exclusion_regions=exclusion_filter
+            )
+            
+            # Select reads for this group
+            logger.info(f"Selecting {len(insertion_ids)} reads for region group {region_bed_path}")
+            reads_with_metadata = read_selector.select_reads(len(insertion_ids))
+            
+            if len(reads_with_metadata) < len(insertion_ids):
+                logger.warning(f"Only found {len(reads_with_metadata)} suitable reads for {region_bed_path}, "
+                             f"but need {len(insertion_ids)}. Truncating insertion list.")
+                insertion_ids = insertion_ids[:len(reads_with_metadata)]
+            
+            all_reads_with_metadata.extend(reads_with_metadata)
+            all_insertion_ids.extend(insertion_ids)
+        
+        if not all_insertion_ids:
+            logger.error("No reads could be selected for any insertion sequences")
+            sys.exit(1)
+        
+        logger.info(f"Total reads selected: {len(all_reads_with_metadata)} for {len(all_insertion_ids)} insertions")
         
         read_inserter = ReadInserter(registry, min_distance_from_ends, random_seed)
         logger.info("Inserting sequences into reads")
         insertion_records, modified_sequences, skip_stats = read_inserter.insert_random_mode(
-            reads_with_metadata, insertion_ids
+            all_reads_with_metadata, all_insertion_ids
         )
         
         records_file = output_path / f"{output_prefix}_insertions.json"
@@ -141,8 +183,11 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
                 'bam_file': bam_file,
                 'config_file': config_file,
                 'total_insertions_requested': total_insertions,
-                'reads_selected': len(reads_with_metadata),
-                'insertions_completed': len(insertion_records)
+                'reads_selected': len(all_reads_with_metadata),
+                'insertions_completed': len(insertion_records),
+                'exclusion_regions_used': list(exclusion_regions) if exclusion_regions and not disable_exclusion_regions else [],
+                'exclusion_regions_disabled': disable_exclusion_regions,
+                'region_groups': {k: len(v) for k, v in region_groups.items()}
             },
             'insertion_statistics': insertion_stats,
             'registry_statistics': registry_stats,
