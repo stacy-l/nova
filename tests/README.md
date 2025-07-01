@@ -11,88 +11,24 @@ This directory contains test files for `nova`'s test suite.
 
 For complete integration testing, you'll need to provide the following files:
 
-### BAM Files
-`nova` requires BAM files for read selection testing. You'll need to provide:
-
-1. **test_reads.bam** - A sample BAM file containing long reads (PacBio/Oxford Nanopore)
-   - Reads should be between 10-20kb in length
-   - Should contain mapped reads with MAPQ scores ≥ 20
-   - Include proper CIGAR strings for soft-clip ratio calculation
+1. **test_reads.bam** - A sample BAM file containing long reads (PacBio)
+    - At least 100 mapped reads
+    - Reads should be between 10-20kb in length
+    - Should contain mapped reads with MAPQ scores ≥ 20
+    - Include proper CIGAR strings for soft-clip ratio calculation
    
 2. **test_reads.bam.bai** - BAM index file (created with `samtools index test_reads.bam`)
 
-### How to Create Test BAM Files
-
-If you don't have suitable BAM files, you can create minimal test files:
-
-```bash
-# Option 1: Use existing BAM files from your data
-cp /path/to/your/long_reads.bam tests/test_data/test_reads.bam
-samtools index tests/test_data/test_reads.bam
-
-# Option 2: Create a minimal test BAM with samtools
-# (This would require reference genome and read data)
-```
-
-### Minimal BAM Requirements for Testing
-
-The test BAM file should contain:
-- At least 100 mapped reads
-- Read lengths between 10,000-20,000 bp
-- Reads with MAPQ ≥ 20
-- Proper reference chromosome names (e.g., chr1, chr2, etc.)
-- Minimal soft clipping (< 10% of read length)
+Store these files at:
+- `tests/test_data/test_reads.bam`
+- `tests/test_data/test_reads.bam.bai`
 
 ### Alternative: Mock Testing
 
 Most tests use mocked pysam objects to avoid requiring actual BAM files. Only integration tests that specifically test BAM file reading will need real BAM files.
 
-## Test File Locations
-
-When running tests that require these files, place them as:
-- `tests/test_data/test_reads.bam`
-- `tests/test_data/test_reads.bam.bai`
-
 ## Running Tests
 
-### Setup Test Environment
-
-Tests use pytest and require a Python virtual environment. If `nova-test-env` is not in the working directory, you can set this up using `uv` or `pip`:
-
-```bash
-# Using uv (recommended)
-uv venv nova-test-env
-source nova-test-env/bin/activate
-uv pip install -r requirements.txt
-uv pip install -e .
-
-# Or using pip
-python -m venv nova-test-env
-source nova-test-env/bin/activate
-pip install -r requirements.txt
-pip install -e .
-```
-
-### Verify Test Environment Setup
-
-To verify your test environment is ready:
-
-```bash
-# Check if nova-test-env venv is active: if so, this will print a help message
-nova --help
-
-# Activate venv if nova is not found
-source nova-test-env/bin/activate
-
-# Check that venv is active again
-# Should show nova commands: simulate, validate-config
-nova --help
-
-```
-
-### Running Tests
-
-Tests can only be run after verifying that the environment is active.
 ```bash
 # Run all tests (most use mocks, don't require BAM files)
 python -m pytest tests/ -v
@@ -105,18 +41,4 @@ python -m pytest tests/test_integration.py
 
 # Run with coverage
 python -m pytest tests/ --cov=nova
-```
-
-### Real Data Integration Tests
-
-When `test_reads.bam` is available, the integration test suite includes three real data tests:
-
-1. **Small-scale test** (`test_full_pipeline_with_real_bam`): 20 variants/reads
-2. **Medium-scale test** (`test_medium_scale_real_bam_pipeline`): 100 variants/reads using window-limited sampling
-3. **Large-scale test** (`test_large_scale_proportional_sampling`): 500 reads using proportional sampling
-
-These tests validate that:
-- Both sampling strategies (window-limited < 500, proportional ≥ 500) work with real genomic data
-- The system scales properly from small simulations to larger ones
-- Mock testing constructs accurately represent real BAM file behavior
-- Chromosome-proportional distribution works correctly across multiple chromosomes
+``

@@ -779,12 +779,13 @@ class ReadSelector:
                     strategy = "legacy-proportional"
             else:
                 # New unified approach (default)
-                selected_reads = self._select_reads_unified(bam, n_reads)
+                selected_reads = self._select_lazy_reads_unified(bam, n_reads)
                 strategy = "unified"
             
             # Calculate chromosome distribution for logging
             chrom_counts = {}
-            for _, metadata in selected_reads:
+            for read in selected_reads:
+                metadata = read.get_metadata()
                 chrom = metadata.original_chr
                 chrom_counts[chrom] = chrom_counts.get(chrom, 0) + 1
             

@@ -615,6 +615,9 @@ class VariantGenerator:
                         errors.append(f"{prefix}'{pred_type}' missing 'fasta' or 'spec' fields")
                     if not isinstance(type_config.get('spec', {}), dict):
                         errors.append(f"{prefix}'{pred_type}' 'spec' must be a dictionary")
+                    for seq_name, count in type_config['spec'].items():
+                        if not isinstance(count, int) or count <= 0:
+                            errors.append(f"{prefix}'{pred_type}' 'spec' must contain positive integer counts")
                     
                     # Validate mutations config if present
                     if 'mutations' in type_config:

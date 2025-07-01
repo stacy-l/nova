@@ -220,7 +220,7 @@ def write_private_variant_files(report, output_prefix, all_presence, variant_ids
         group_bin = bin(presence_flag)[2:].rjust(n_vcfs, '0')
         
         if group_bin.count('1') == 1:
-            variant_groups[group_bin].append(variant_key)
+            variant_groups[group_bin].append(variant_key) 
     
     for group_pattern, variant_keys in variant_groups.items():
         vcf_index = group_pattern.index('1')

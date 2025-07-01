@@ -55,11 +55,6 @@ nova validate-config config.json
 - **Testing Setup**: [tests/README.md](tests/README.md)
 - **Analysis Scripts**: [scripts/README.md](scripts/README.md)
 
-### Source Code
-- **Read Selection**: `src/nova/read_selector.py` - Window-based selection algorithm
-- **Variant Generation**: `src/nova/variant_generator.py` - Three insertion types
-- **CLI Interface**: `src/nova/cli.py` - Command-line parameters
-
 ## Documentation Guidelines for Claude
 
 ### When to Create Documentation
@@ -84,22 +79,6 @@ nova validate-config config.json
 - ✅ Create docs for: experiments, major features, user requests
 - ❌ Don't create docs for: minor fixes, temporary notes, code comments
 - 📝 Always update CLAUDE.md when: adding new docs, changing key params
-
-## Common Commands
-
-```bash
-# Run tests
-python -m pytest tests/ -v
-
-# Run with coverage
-python -m pytest tests/ --cov=nova
-
-# Snakemake pipeline
-snakemake --use-conda --cores 8
-
-# Analyze results
-python scripts/analyze_vcf_results.py --vcf results.vcf.gz --insertions nova_insertions.json
-```
 
 ## Environment Notes
 

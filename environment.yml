@@ -2,23 +2,24 @@ name: nova
 channels:
   - conda-forge
   - bioconda
-  - defaults
 dependencies:
-  - python>=3.8
-  - setuptools==80.9.0 # note: flagged for deprecation, dependency of pyranges
-  - pysam>=0.19.0
-  - bedtools>=2.30.0
-  - numpy>=1.20.0
-  - biopython>=1.79
-  - pyranges>=0.0.129
-  - click>=8.0.0
-  - samtools>=1.15
-  - bcftools>=1.15
-  - minimap2>=2.26
-  - pytest>=6.0.0
-  - pytest-cov>=2.12.0
-  - snakemake-minimal==9.6.2
+  - python>=3.10
+  - pip==25.1.1
+  - uv==0.6.11
+  - bedtools==2.31.1
+  - samtools==1.22
+  - bcftools==1.22
+  - minimap2==2.30
   - sniffles==2.6.1
   - truvari==5.3.0
+  - snakemake-minimal==9.6.2
+  - setuptools==80.9.0 # note: flagged for deprecation, dependency of pyranges
+  - biopython==1.85
+  - pysam==0.23.3
+  - pandas==2.3.0
+  - numpy==2.3.1
+  - pyranges==0.1.4
+  - click==8.2.1
+  - pytest==8.4.1
   - matplotlib==3.10.3
   - seaborn==0.13.2

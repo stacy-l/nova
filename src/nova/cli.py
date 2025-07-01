@@ -30,6 +30,55 @@ def setup_logging(verbose: bool = False) -> None:
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
+def _validate_config(config_file, logger):
+    """
+    Validate configuration file format and contents.
+    
+    CONFIG_FILE: Path to JSON configuration file to validate
+    """
+    try:
+        logger.info(f"Loading configuration from {config_file}")
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load variant config file: {e}")
+        sys.exit(1)
+    try:
+        registry = VariantRegistry()
+        generator = VariantGenerator(registry)
+        
+        errors = generator.validate_config(config)
+        
+        if errors:
+            logger.error("Configuration validation failed:")
+            for error in errors:
+                logger.error(f"  - {error}")
+            sys.exit(1)
+        else:
+            logger.info("Configuration is valid")
+            total_variants = 0
+            
+            if 'random' in config:
+                random_configs = generator._normalize_to_list(config['random'])
+                for random_config in random_configs:
+                    total_variants += random_config['n']
+            
+            if 'simple' in config:
+                simple_configs = generator._normalize_to_list(config['simple'])
+                for simple_config in simple_configs:
+                    total_variants += simple_config['n']
+            
+            if 'predefined' in config:
+                predefined_configs = generator._normalize_to_list(config['predefined'])
+                for pred_config in predefined_configs:
+                    for type_config in pred_config.values():
+                        total_variants += sum(type_config['spec'].values())
+            
+            logger.info(f"Configuration would generate {total_variants} total variants")        
+    except Exception as e:
+        logger.error(f"Failed to validate configuration: {e}")
+        sys.exit(1)
+
 
 @click.group()
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
@@ -38,7 +87,7 @@ def cli(ctx, verbose):
     """nova: de novo variant insertion simulator."""
     ctx.ensure_object(dict)
     ctx.obj['verbose'] = verbose
-    setup_logging(verbose)
+    setup_logging(verbose) 
 
 
 @cli.command()
@@ -82,25 +131,19 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
     config_file: Path to JSON configuration file (determines variants to simulate)
     """
     logger = logging.getLogger(__name__)
-    
+
+    # Validate configuration before running - will exit if invalid
+    _validate_config(config_file, logger)
+
     try:
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"Loading configuration from {config_file}")
-        with open(config_file, 'r') as f:
-            config = json.load(f)
-        
         registry = VariantRegistry()
         generator = VariantGenerator(registry, random_seed)
-        
-        # Validate configuration
-        validation_errors = generator.validate_config(config)
-        if validation_errors:
-            logger.error("Configuration validation failed:")
-            for error in validation_errors:
-                logger.error(f"  - {error}")
-            sys.exit(1)
         
         # Setup exclusion regions from config
         exclusion_filter = None
@@ -166,22 +209,21 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
             random.seed(random_seed)
         random.shuffle(all_insertion_ids)
         
-        read_inserter = ReadInserter(registry, min_distance_from_ends, random_seed)
-        logger.info("Inserting sequences into reads")
-        insertion_records, modified_sequences, skip_stats = read_inserter.insert_random_mode(
-            all_reads_with_metadata, all_insertion_ids
-        )
-        
         records_file = output_path / f"{output_prefix}_insertions.json"
         sequences_file = output_path / f"{output_prefix}_modified_reads.fasta"
         registry_file = output_path / f"{output_prefix}_registry.json"
         stats_file = output_path / f"{output_prefix}_statistics.json"
-        read_inserter.save_insertion_records(insertion_records, str(records_file))
-        read_inserter.save_modified_sequences(modified_sequences, str(sequences_file))
+        read_inserter = ReadInserter(registry, min_distance_from_ends, random_seed)
+        logger.info("Inserting sequences into reads")
+        insertion_stats = read_inserter.insert_streaming(
+            all_reads_with_metadata, all_insertion_ids, str(records_file), str(sequences_file)
+        ) # insertion records and sequences are written to files directly
+        
+        # read_inserter.save_insertion_records(insertion_records, str(records_file))
+        # read_inserter.save_modified_sequences(modified_sequences, str(sequences_file))
         registry.save_to_json(str(registry_file))
         
-        insertion_stats = read_inserter.get_insertion_statistics(insertion_records)
-        registry_stats = registry.get_statistics()
+        # insertion_stats = read_inserter.get_insertion_statistics(insertion_records)
         
         all_stats = {
             'input_parameters': {
@@ -189,14 +231,12 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
                 'config_file': config_file,
                 'total_insertions_requested': total_insertions,
                 'reads_selected': len(all_reads_with_metadata),
-                'insertions_completed': len(insertion_records),
+                'insertions_completed': insertion_stats['total_insertions'],
                 'exclusion_regions_used': config_exclusions if config_exclusions and not disable_exclusion_regions else [],
                 'exclusion_regions_disabled': disable_exclusion_regions,
                 'region_groups': {k: len(v) for k, v in region_groups.items()}
             },
-            'insertion_statistics': insertion_stats,
-            'registry_statistics': registry_stats,
-            'insertion_success_summary': skip_stats
+            'insertion_statistics': insertion_stats
         }
         
         with open(stats_file, 'w') as f:
@@ -220,58 +260,13 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
 @click.argument('config_file', type=click.Path(exists=True))
 def validate_config(config_file):
     """
-    Validate configuration file format and contents.
-    
-    CONFIG_FILE: Path to JSON configuration file to validate
+    cli wrapper around _validate_config(), for convenience.
     """
     logger = logging.getLogger(__name__)
-    
-    try:
-        with open(config_file, 'r') as f:
-            config = json.load(f)
-        
-        registry = VariantRegistry()
-        generator = VariantGenerator(registry)
-        
-        errors = generator.validate_config(config)
-        
-        if errors:
-            logger.error("Configuration validation failed:")
-            for error in errors:
-                logger.error(f"  - {error}")
-            sys.exit(1)
-        else:
-            logger.info("Configuration is valid")
-            total_variants = 0
-            
-            if 'random' in config:
-                random_configs = generator._normalize_to_list(config['random'])
-                for random_config in random_configs:
-                    total_variants += random_config['n']
-            
-            if 'simple' in config:
-                simple_configs = generator._normalize_to_list(config['simple'])
-                for simple_config in simple_configs:
-                    total_variants += simple_config['n']
-            
-            if 'predefined' in config:
-                predefined_configs = generator._normalize_to_list(config['predefined'])
-                for pred_config in predefined_configs:
-                    for type_config in pred_config.values():
-                        total_variants += sum(type_config['spec'].values())
-            
-            logger.info(f"Configuration would generate {total_variants} total variants")
-            
-    except Exception as e:
-        logger.error(f"Failed to validate configuration: {e}")
-        sys.exit(1)
-
-
-
+    _validate_config(config_file, logger)
 
 def main():
     cli()
-
 
 if __name__ == '__main__':
     main()

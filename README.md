@@ -8,11 +8,28 @@ A Python simulation framework to evaluate structural variant detection tools' ab
 
 ## Installation
 
+### Standalone
+`nova` can be installed using `uv` or `pip`. We recommend installing it into a venv managed by `uv`:
+
 ```bash
-conda env create -f environment.yml --subdir osx-64
-conda activate nova
-uv pip install -e .
+uv venv nova-venv
+source nova-venv/bin/activate
+uv pip install -e. # atm this is dev only, switch to nova later if up on pypi
 ```
+
+### Pipeline
+We recommend using the `environment.yml` file to install all requirements to run the full `nova` simulation pipeline.
+
+```bash
+# we recommend using mamba for faster environment resolution
+mamba env create -f environment.yml --subdir osx-64
+conda activate nova
+conda config --env --set subdir osx-64 
+
+uv pip install -e. # switch to conda later, but uv recognizes and respects activate conda env
+```
+
+If you want to avoid `conda`/`mamba`
 
 ## Usage
 
@@ -299,30 +316,7 @@ nova validate-config config.json
 
 ## Testing
 
-### Setup Test Environment
-
-Tests use pytest and require a Python virtual environment:
-
 ```bash
-# Using uv (recommended)
-uv venv nova-test-env
-source nova-test-env/bin/activate
-uv pip install -r requirements.txt
-uv pip install -e .
-
-# Or using pip
-python -m venv nova-test-env
-source nova-test-env/bin/activate
-pip install -r requirements.txt
-pip install -e .
-```
-
-### Run the Test Suite
-
-```bash
-# Activate your virtual environment first
-source nova-test-env/bin/activate
-
 # Run all tests
 python -m pytest tests/ -v
 

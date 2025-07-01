@@ -3,22 +3,27 @@ from setuptools import setup, find_packages
 setup(
     name="nova",
     version="0.1.0",
-    description="De novo variant insertion simulator for testing structural variant detection",
-    long_description="Requires external bioinformatics tools: samtools, bedtools, bcftools, minimap2 (install via conda environment.yml)",
+    description="de novo variant simulator",
+    long_description="de novo variant simulator",
     author="voidshapes",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     install_requires=[
-        "pysam>=0.19.0",
-        "numpy>=1.20.0",
-        "biopython>=1.79",
-        "click>=8.0.0",
+        "setuptools==80.9.0", # note: flagged for deprecation, dependency of pyranges
+        "biopython==1.85",
+        "pysam==0.23.3",
+        "pandas==2.3.0",
+        "numpy==2.3.1",
+        "pyranges==0.1.4",
+        "click==8.2.1",
+        "matplotlib==3.10.3",
+        "seaborn==0.13.2",
     ],
     extras_require={
         "test": [
-            "pytest>=6.0.0",
-            "pytest-cov>=2.12.0",
+            "pytest==8.4.1",
+            "pytest-cov==6.2.1",
         ],
     },
     entry_points={

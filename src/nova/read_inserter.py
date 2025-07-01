@@ -204,10 +204,10 @@ class ReadInserter:
         
         return insertion_records, modified_sequences, skip_stats
     
-    def insert_streaming_mode(self, lazy_reads: List[LazyReadReference], 
+    def _stream_insertion(self, lazy_reads: List[LazyReadReference], 
                             insertion_ids: List[str]):
         """
-        Insert sequences into reads using streaming mode to minimize memory usage.
+        Insert sequences into reads using streaming to minimize memory usage.
         
         Args:
             lazy_reads: List of LazyReadReference objects
@@ -331,32 +331,31 @@ class ReadInserter:
         
         self.logger.info(f"Saved {len(modified_sequences)} modified sequences to {output_path}")
     
-    def save_streaming_results(self, lazy_reads: List[LazyReadReference], 
+    def insert_streaming(self, lazy_reads: List[LazyReadReference], 
                              insertion_ids: List[str],
-                             output_prefix: str) -> Dict[str, Any]:
+                             records_path: str,
+                             sequences_path: str) -> Dict[str, Any]:
         """
         Process insertions in streaming mode and save results directly to files.
         
         Args:
             lazy_reads: List of LazyReadReference objects
             insertion_ids: List of insertion IDs to use
-            output_prefix: Prefix for output files
+            records_path: Path to output JSON file
+            sequences_path: Path to output FASTA file
             
         Returns:
             Dictionary with statistics and file paths
         """
-        records_file = f"{output_prefix}_insertions.json"
-        sequences_file = f"{output_prefix}_modified_reads.fasta"
-        
         insertion_records = []
         sequences_written = 0
         
         # Open files for streaming write
-        with open(records_file, 'w') as records_f, open(sequences_file, 'w') as sequences_f:
+        with open(records_path, 'w') as records_f, open(sequences_path, 'w') as sequences_f:
             records_f.write('[\n')  # Start JSON array
             first_record = True
             
-            for insertion_record, seq_record in self.insert_streaming_mode(lazy_reads, insertion_ids):
+            for insertion_record, seq_record in self._stream_insertion(lazy_reads, insertion_ids):
                 # Write insertion record to JSON (streaming)
                 if not first_record:
                     records_f.write(',\n')
@@ -372,22 +371,13 @@ class ReadInserter:
             
             records_f.write('\n]')  # Close JSON array
         
-        # Calculate and log statistics
-        stats = {
-            'total_insertions': len(insertion_records),
-            'sequences_written': sequences_written,
-            'records_file': records_file,
-            'sequences_file': sequences_file
-        }
-        
         if insertion_records:
-            detailed_stats = self.get_insertion_statistics(insertion_records)
-            stats.update(detailed_stats)
+            insertion_stats = self.get_insertion_statistics(insertion_records)
         
-        self.logger.info(f"Streaming results saved: {len(insertion_records)} records to {records_file}, "
-                        f"{sequences_written} sequences to {sequences_file}")
+        self.logger.info(f"Streaming results saved: {len(insertion_records)} records to {records_path}, "
+                        f"{sequences_written} sequences to {sequences_path}")
         
-        return stats
+        return insertion_stats
     
     def get_insertion_statistics(self, insertion_records: List[InsertionRecord]) -> Dict[str, Any]:
         """
@@ -403,26 +393,14 @@ class ReadInserter:
             return {'total_insertions': 0}
         
         type_counts = {}
-        position_stats = {}
         length_stats = {}
         
         for record in insertion_records:
             type_counts[record.insertion_type] = type_counts.get(record.insertion_type, 0) + 1
             
-            if record.insertion_type not in position_stats:
-                position_stats[record.insertion_type] = []
-            position_stats[record.insertion_type].append(record.insertion_pos)
-            
             if record.insertion_type not in length_stats:
                 length_stats[record.insertion_type] = []
             length_stats[record.insertion_type].append(record.insertion_length)
-        for insertion_type, positions in position_stats.items():
-            position_stats[insertion_type] = {
-                'count': len(positions),
-                'min': min(positions),
-                'max': max(positions),
-                'mean': sum(positions) / len(positions)
-            }
         
         for insertion_type, lengths in length_stats.items():
             length_stats[insertion_type] = {
@@ -435,7 +413,6 @@ class ReadInserter:
         return {
             'total_insertions': len(insertion_records),
             'type_counts': type_counts,
-            'position_statistics': position_stats,
             'length_statistics': length_stats
         }
     
