@@ -194,8 +194,10 @@ rule vcf2df:
 
 rule analyze_vcf_results:
     input:
-        "scripts/analyze_vcf_results.py",
-        vcf=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz"
+        script="scripts/analyze_vcf_results.py",
+        jl=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.jl",
+        insertions=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_insertions.json",
+        statistics=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_statistics.json"
     output:
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary.json",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis.csv"
@@ -206,5 +208,5 @@ rule analyze_vcf_results:
         outdir = config["output_dir"],
     shell:
         """
-        python scripts/analyze_vcf_results.py {params.outdir}
+        python {input.script} {params.outdir}
         """
