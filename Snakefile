@@ -1,5 +1,5 @@
 """
-Nova: De novo variant insertion simulator - Snakemake pipeline
+nova: de novo variant insertion simulation pipeline
 """
 
 import json
@@ -167,33 +167,6 @@ use rule call_variants_base as call_variants_sim with:
         tbi=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz.tbi"
     log:
         f"{OUTPUT_DIR}/logs/{OUTPUT_PREFIX}_simulation.qc_all.log"
-
-# rule simulation_benchmark:
-#     input:
-#         query = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz",
-#         query_index = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.vcf.gz.tbi",
-#         benchmark = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.vcf.gz",
-#         benchmark_index = f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.vcf.gz.tbi"
-#     output:
-#         expand(f"{OUTPUT_DIR}/{{outfiles}}",
-#                outfiles = ["tp-base.vcf.gz", "tp-comp.vcf.gz", "fp.vcf.gz", "fn.vcf.gz", "summary.json", "params.json", "candidate.refine.bed", "log.txt"])
-#     conda: 
-#         "nova"
-#     threads: 1
-#     params:
-#         refgenome = config['reference_genome'],
-#         outdir=config["output_dir"],
-#     shell:
-#         """
-#         # --pctseq 0 required to analyze <DEL> (unresolved deletion, needs clarification?)
-#         truvari bench \
-#         -f {params.refgenome} \
-#         -b {input.base} \
-#         -c {input.query} \
-#         -o {params.outdir}/bench \
-#         -r 1000 \
-#         --dup-to-ins
-#         """
 
 rule vcf2df:
     input:
