@@ -19,7 +19,6 @@ rule all:
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_registry.json",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_statistics.json",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.jl",
-        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.jl",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary.json",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis.csv",
 

@@ -1,10 +1,10 @@
-# Nova: De Novo Variant Insertion Simulator
+# `nova`: De Novo Variant Insertion Simulator
 
 A Python simulation framework to evaluate structural variant detection tools' ability to detect ultra-low frequency de novo insertions.
 
 ## Overview
 
-Nova simulates de novo variant insertions in long-read sequencing data to test the sensitivity and specificity of structural variant detection tools like `vesper`. The simulator can generate random, simple repeat, and predefined insertion sequences and insert them into reads at ultra-low frequencies typical of de novo structural variants.
+`nova` simulates de novo variant insertions in long-read sequencing data to test the sensitivity and specificity of structural variant detection tools like `vesper`. The simulator can generate random, simple repeat, and predefined insertion sequences and insert them into reads at ultra-low frequencies typical of de novo structural variants.
 
 ## Installation
 
@@ -137,7 +137,7 @@ This example generates:
 
 #### Mutation Feature
 
-Nova supports applying point mutations to generated sequences to simulate sequence divergence. Mutations are applied after sequence generation but before insertion into reads, with each copy receiving different mutations for realistic diversity.
+`nova` supports applying point mutations to generated sequences to simulate sequence divergence. Mutations are applied after sequence generation but before insertion into reads, with each copy receiving different mutations for realistic diversity.
 
 **Example with mutations:**
 ```json
@@ -183,6 +183,68 @@ Nova supports applying point mutations to generated sequences to simulate sequen
 - **Configurable per generator**: Different mutation rates for random, simple, and predefined sequences
 - **Backwards compatible**: Mutations are optional; existing configs work unchanged
 
+#### Region-Targeted Simulation
+
+`nova` supports targeting specific genomic regions for variant insertion using BED files. This allows you to restrict insertions to regions of interest (e.g., exons, regulatory elements) or create region-specific variant sets.
+
+**Example configuration with target regions:**
+```json
+{
+  "random": [
+    {
+      "n": 50,
+      "length": 100,
+      "target_regions": "/path/to/exons.bed"
+    },
+    {
+      "n": 30,
+      "length": 200,
+      "target_regions": "/path/to/regulatory_regions.bed"
+    },
+    {
+      "n": 20,
+      "length": 150
+    }
+  ],
+  "simple": [
+    {
+      "n": 100,
+      "repeat": "CAG",
+      "units": 20,
+      "target_regions": "/path/to/coding_regions.bed"
+    }
+  ],
+  "predefined": [
+    {
+      "Alu": {
+        "fasta": "alu_sequences.fasta",
+        "spec": {"AluYa5": 30},
+        "target_regions": "/path/to/introns.bed"
+      }
+    }
+  ],
+  "exclusion_regions": [
+    "/path/to/centromeres.bed",
+    "/path/to/heterochromatin.bed"
+  ]
+}
+```
+
+**Region targeting features:**
+- **Per-variant targeting**: Each variant configuration can specify different target regions
+- **Mixed targeting**: Some variants can be region-targeted while others remain global (no `target_regions` specified)
+- **Dual filtering system**: 
+  - **Target regions** (inclusion): Only reads overlapping specified regions are selected for insertion
+  - **Exclusion regions** (exclusion): Reads overlapping these regions are rejected, takes precedence over target regions
+- **BED file format**: Standard BED format with chromosome, start, end coordinates
+- **Efficient processing**: Uses PyRanges library for fast genomic interval operations
+
+**How it works:**
+1. `nova` groups insertion sequences by their target region requirements
+2. For each region group, reads are filtered to only include those overlapping the target regions
+3. Exclusion regions are applied globally - reads overlapping these regions are rejected regardless of target regions
+4. Variants are inserted only into region-filtered reads, ensuring precise genomic targeting
+
 ### Command Line Options
 
 - `--output-dir, -o`: Output directory for results (default: current directory)
@@ -203,7 +265,7 @@ nova validate-config config.json
 
 ## Output Files
 
-Nova generates several output files:
+`nova` generates several output files:
 
 1. **`*.insertions.json`**: Detailed insertion records with positions and metadata
 2. **`*.modified_reads.fasta`**: FASTA file with modified reads containing insertions
