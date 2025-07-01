@@ -10,6 +10,9 @@ OUTPUT_PREFIX = config["output_prefix"]
 
 rule all:
     input:
+        # Archived configs for reproducibility
+        f"{OUTPUT_DIR}/configs/snakemake_config.yml",
+        f"{OUTPUT_DIR}/configs/nova_variant_config.json",
         # Core simulation outputs
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_insertions.json",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_modified_reads.fasta",
@@ -18,7 +21,21 @@ rule all:
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.jl",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.jl",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary.json",
-        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis.csv"
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis.csv",
+
+rule archive_configs:
+    input:
+        snakemake_config=workflow.configfiles[0],
+        nova_config=config["variant_config"]
+    output:
+        f"{OUTPUT_DIR}/configs/snakemake_config.yml",
+        f"{OUTPUT_DIR}/configs/nova_variant_config.json"
+    shell:
+        """
+        mkdir -p {OUTPUT_DIR}/configs
+        cp {input.snakemake_config} {output[0]}
+        cp {input.nova_config} {output[1]}
+        """
 
 rule simulate_variant_reads:
     input:

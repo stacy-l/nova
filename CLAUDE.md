@@ -104,3 +104,10 @@ python scripts/analyze_vcf_results.py --vcf results.vcf.gz --insertions nova_ins
 ## Environment Notes
 
 **Important**: If `which python` doesn't show the nova conda environment path, prompt the user to exit and run `conda activate nova` before proceeding.
+
+## Known Issues
+
+**Snakemake output crashes Claude Code**: Running `snakemake` commands can cause BrokenPipeError crashes. To test Snakemake workflows:
+- Use `snakemake -n --quiet` for dry runs
+- Redirect output to files: `snakemake -n > output.txt 2>&1`
+- Check files directly instead of streaming output

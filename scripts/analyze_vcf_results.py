@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 Analyze Sniffles2 VCF results to identify variants supported by nova simulated reads.
 
