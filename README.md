@@ -1,24 +1,15 @@
-# `nova`: De Novo Variant Insertion Simulator
-
-A Python simulation framework to evaluate structural variant detection tools' ability to detect ultra-low frequency de novo insertions.
+# `nova`: *de novo* insertion simulator
 
 ## Overview
 
-`nova` simulates de novo variant insertions in long-read sequencing data to test the sensitivity and specificity of structural variant detection tools like `vesper`. The simulator can generate random, simple repeat, and predefined insertion sequences and insert them into reads at ultra-low frequencies typical of de novo structural variants.
+`nova` simulates de novo variant insertions in long-read sequencing data. 
+
+The simulator can generate random, simple repeat, and predefined insertion sequences and insert them into reads at ultra-low frequencies typical of de novo structural variants.
 
 ## Installation
 
-### Standalone
-`nova` can be installed using `uv` or `pip`. We recommend installing it into a venv managed by `uv`:
-
-```bash
-uv venv nova-venv
-source nova-venv/bin/activate
-uv pip install -e. # atm this is dev only, switch to nova later if up on pypi
-```
-
-### Pipeline
-We recommend using the `environment.yml` file to install all requirements to run the full `nova` simulation pipeline.
+### `conda` (recommended)
+We recommend using `mamba` or `conda` for (almost) one-step installation. 
 
 ```bash
 # we recommend using mamba for faster environment resolution
@@ -29,326 +20,63 @@ conda config --env --set subdir osx-64
 uv pip install -e. # switch to conda later, but uv recognizes and respects activate conda env
 ```
 
-If you want to avoid `conda`/`mamba`
-
-## Usage
-
-### Basic Simulation
+### Standalone install
+`nova` can be installed using `uv` or `pip`. We recommend installing it into a venv managed by `uv`, like so:
 
 ```bash
-nova simulate input.bam config.json -o output_dir
+uv venv nova-venv
+source nova-venv/bin/activate
+uv pip install -e. # atm this is dev only, switch to nova later if up on pypi
 ```
 
-### Configuration File
+The requirements for `nova` are detailed in both `setup.py` and `requirements.txt`. However, there are several dependencies that aren't available via PyPi, hence why we recommend `conda`/`mamba`. 
 
-Create a JSON configuration file specifying the types and numbers of variants to simulate.
-
-#### Single Entry Format (Original)
-```json
-{
-  "random": {
-    "n": 50,
-    "length": 100,
-    "gc_content": 0.5
-  },
-  "simple": {
-    "n": 50,
-    "repeat": "CAG",
-    "units": 40
-  },
-  "predefined": {
-    "Alu": {
-      "fasta": "dfam_AluY_homininae.fasta",
-      "spec": {
-        "AluYa5": 30,
-        "AluYb8": 20
-      }
-    }
-  }
-}
+If you want to avoid that path entirely, you'll need to install additional dependencies to use the `snakemake` pipeline:
+```
+bedtools==2.31.1
+samtools==1.22
+bcftools==1.22
+minimap2==2.30
+sniffles==2.6.1
+truvari==5.3.0
+snakemake-minimal==9.6.2
 ```
 
-#### Multiple Entry Format (New)
-You can now specify multiple configurations for the same generator type to create more diverse simulations:
+## Quick Start
 
-```json
-{
-  "random": [
-    {
-      "n": 50,
-      "length": 100,
-      "gc_content": 0.4
-    },
-    {
-      "n": 50,
-      "length": 200,
-      "gc_content": 0.6
-    },
-    {
-      "n": 50,
-      "length": 300
-    }
-  ],
-  "simple": [
-    {
-      "n": 100,
-      "repeat": "CAG",
-      "units": 20
-    },
-    {
-      "n": 100,
-      "repeat": "GC", 
-      "units": 10
-    }
-  ],
-  "predefined": [
-    {
-      "Alu": {
-        "fasta": "dfam_AluY_homininae.fasta",
-        "spec": {
-          "AluYa5": 30,
-          "AluYb8": 20
-        }
-      }
-    },
-    {
-      "L1": {
-        "fasta": "dfam_L1_elements.fasta",
-        "spec": {
-          "L1HS": 15,
-          "L1PA2": 10
-        }
-      }
-    }
-  ]
-}
-```
-
-This example generates:
-- 50 random sequences of 100bp with 40% GC content
-- 50 random sequences of 200bp with 60% GC content  
-- 50 random sequences of 300bp with default GC content
-- 100 CAG repeat sequences (20 units each)
-- 100 GC repeat sequences (10 units each)
-- 30 AluYa5 + 20 AluYb8 sequences from Alu FASTA
-- 15 L1HS + 10 L1PA2 sequences from L1 FASTA
-
-#### Configuration Options
-
-**Random sequences:**
-- `n`: Number of sequences to generate
-- `length`: Length of each sequence
-- `gc_content`: Target GC content (0.0-1.0, optional)
-
-**Simple repeats:**
-- `n`: Number of sequences to generate
-- `repeat`: Repeat unit sequence (e.g., "CAG", "GC")
-- `units`: Number of repeat units
-
-**Predefined sequences:**
-- `fasta`: Path to FASTA file containing sequences
-- `spec`: Dictionary mapping sequence names to counts
-
-**Mutations (optional for all types):**
-- `mutations.substitution_rate`: Rate of point mutations (0.0-1.0, e.g., 0.02 = 2% divergence)
-
-#### Mutation Feature
-
-`nova` supports applying point mutations to generated sequences to simulate sequence divergence. Mutations are applied after sequence generation but before insertion into reads, with each copy receiving different mutations for realistic diversity.
-
-**Example with mutations:**
-```json
-{
-  "random": [
-    {
-      "n": 100,
-      "length": 300,
-      "gc_content": 0.4,
-      "mutations": {
-        "substitution_rate": 0.02
-      }
-    }
-  ],
-  "simple": [
-    {
-      "n": 50,
-      "repeat": "CAG",
-      "units": 20,
-      "mutations": {
-        "substitution_rate": 0.015
-      }
-    }
-  ],
-  "predefined": [
-    {
-      "Alu": {
-        "fasta": "alu_sequences.fasta",
-        "spec": {"AluYa5": 30},
-        "mutations": {
-          "substitution_rate": 0.01
-        }
-      }
-    }
-  ]
-}
-```
-
-**Mutation Features:**
-- **Deterministic but diverse**: Each sequence copy gets different mutations using deterministic seeding
-- **Equal substitution probability**: Each base mutates to any of the other 3 bases with equal probability
-- **Detailed tracking**: All mutations are recorded with positions and base changes in output metadata
-- **Configurable per generator**: Different mutation rates for random, simple, and predefined sequences
-- **Backwards compatible**: Mutations are optional; existing configs work unchanged
-
-#### Region-Targeted Simulation
-
-`nova` supports targeting specific genomic regions for variant insertion using BED files. This allows you to restrict insertions to regions of interest (e.g., exons, regulatory elements) or create region-specific variant sets.
-
-**Example configuration with target regions:**
-```json
-{
-  "random": [
-    {
-      "n": 50,
-      "length": 100,
-      "target_regions": "/path/to/exons.bed"
-    },
-    {
-      "n": 30,
-      "length": 200,
-      "target_regions": "/path/to/regulatory_regions.bed"
-    },
-    {
-      "n": 20,
-      "length": 150
-    }
-  ],
-  "simple": [
-    {
-      "n": 100,
-      "repeat": "CAG",
-      "units": 20,
-      "target_regions": "/path/to/coding_regions.bed"
-    }
-  ],
-  "predefined": [
-    {
-      "Alu": {
-        "fasta": "alu_sequences.fasta",
-        "spec": {"AluYa5": 30},
-        "target_regions": "/path/to/introns.bed"
-      }
-    }
-  ],
-  "exclusion_regions": [
-    "/path/to/centromeres.bed",
-    "/path/to/heterochromatin.bed"
-  ]
-}
-```
-
-**Region targeting features:**
-- **Per-variant targeting**: Each variant configuration can specify different target regions
-- **Mixed targeting**: Some variants can be region-targeted while others remain global (no `target_regions` specified)
-- **Dual filtering system**: 
-  - **Target regions** (inclusion): Only reads overlapping specified regions are selected for insertion
-  - **Exclusion regions** (exclusion): Reads overlapping these regions are rejected, takes precedence over target regions
-- **BED file format**: Standard BED format with chromosome, start, end coordinates
-- **Efficient processing**: Uses PyRanges library for fast genomic interval operations
-
-**How it works:**
-1. `nova` groups insertion sequences by their target region requirements
-2. For each region group, reads are filtered to only include those overlapping the target regions
-3. Exclusion regions are applied globally - reads overlapping these regions are rejected regardless of target regions
-4. Variants are inserted only into region-filtered reads, ensuring precise genomic targeting
-
-### Command Line Options
-
-- `--output-dir, -o`: Output directory for results (default: current directory)
-- `--output-prefix, -p`: Prefix for output files (default: 'nova_sim')
-- `--min-mapq`: Minimum mapping quality (default: 20)
-- `--max-soft-clip-ratio`: Maximum soft clipping ratio (default: 0.1)
-- `--min-read-length`: Minimum read length (default: 10000)
-- `--max-read-length`: Maximum read length (default: 20000)
-- `--min-distance-from-ends`: Minimum distance from read ends for insertion (default: 1000)
-- `--random-seed`: Random seed for reproducibility
-
-### Utility Commands
-
-#### Validate Configuration
-```bash
-nova validate-config config.json
-```
-
-## Output Files
-
-`nova` generates several output files:
-
-1. **`*.insertions.json`**: Detailed insertion records with positions and metadata
-2. **`*.modified_reads.fasta`**: FASTA file with modified reads containing insertions
-3. **`*.registry.json`**: Registry of all generated insertion sequences
-
-## Features
-
-### Read Selection
-- Filters reads by length and soft-clip ratio
-- Future implementation:
-    - Stratifies reads by genomic complexity (repeats, segmental duplications, unique regions)
-    - Supports inclusion/exclusion of specific genomic regions
-
-### Insertion Generation
-- **Random insertions**: Sequences with specified length and GC content
-- **Simple repeats**: Tandem repeats with specified unit and count
-- **Predefined sequences**: From FASTA files (e.g., Alu elements)
-
-### Read Modification
-- Random positioning within reads (avoiding ends)
-- Preserves original read metadata
-- Generates comprehensive insertion records
-
-## Module Architecture
-
-- `read_selector.py`: BAM file processing and read selection
-- `variant_generator.py`: Insertion sequence generation
-- `variant_registry.py`: Sequence management with unique IDs
-- `read_inserter.py`: Read modification and insertion
-- `cli.py`: Command-line interface
-
-## Testing
+### Read simulation
+`nova` has one main program (`nova simulate`), which samples reads from an input BAM file and modifies them with insertion variants according to a configuration JSON file.
 
 ```bash
-# Run all tests
-python -m pytest tests/ -v
-
-# Run with coverage
-python -m pytest tests/ --cov=nova
-
-# Run specific test modules
-python -m pytest tests/test_variant_generator.py
+nova simulate input.bam config.json \
+--random-seed 783 \
+-o output_dir \
+-p nova
 ```
 
-Most tests use mocks and don't require real BAM files. See `tests/test_data/README.md` for information about providing BAM files for full integration testing.
+For more options and info, read the [simulate](https://github.com/stacy-l/nova/docs/simulate) and [configuration](https://github.com/stacy-l/nova/docs/configuration.md) docs.
 
-## Example Workflow
+### Analysis
 
-1. Prepare your BAM file and optional BED annotation files
-2. Use `bedtools`, `samtools`, or the Snakemake pipeline to subsample reads
-3. Create a configuration JSON file specifying desired variants
-4. Run `nova`:
-   ```bash
-   nova simulate reads.bam config.json -o output_dir
-   ```
-5. Analyze the output files to evaluate your variant detection tool
+`nova` is a variant simulator and doesn't perform variant calling and simulation analysis on its own. There are a number of accompanying scripts that you can use to assess your simulations, described in the [analysis docs](https://github.com/stacy-l/nova/docs/analysis.md) and run by default in the analysis pipeline.
 
-## Requirements
 
-- Python 3.8+
-- pysam
-- pybedtools
-- numpy
-- biopython
-- click
+## Analysis pipeline
+
+We recommend using the `environment.yml` file to install all requirements to run the full pipeline.
+
+1. Prepare your BAM file and variant configuration JSON file specifying desired variants
+2. Prepare the config file (template in `examples/snakemake_config.yml`).
+    - **Note**: You will need to self-supply the path to the reference genome and repeat file (for `sniffles2`).
+3. Dry run the pipeline, specifying the path to your edited config file:
+```bash
+snakemake --use-conda --configfile {edited_config.yml} -np
+```
+4. Once the dry run is working, run the pipeline with resource-appropriate core allocation:
+```bash
+snakemake --use-conda --configfile {edited_config.yml} --cores {cores}
+```
 
 ## License
 
-MIT License
+(tbd?)

@@ -16,7 +16,7 @@ setup(
         "pandas==2.3.0",
         "numpy==2.3.1",
         "pyranges==0.1.4",
-        "click==8.2.1",
+        "rich-click==1.8.9",
         "matplotlib==3.10.3",
         "seaborn==0.13.2",
     ],

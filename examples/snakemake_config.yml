@@ -1,9 +1,7 @@
-# Nova Snakemake Pipeline Configuration
-
 # Input files (REQUIRED)
-bam_file: "tests/test_data/test_reads.bam"                                            # Path to input BAM file
-reference_genome: "/Users/stacy/sudmant/references/hg38_HGSVC/hg38.no_alt.fa.gz"      # Path to reference genome FASTA
-repeats: "/Users/stacy/sudmant/references/hg38_HGSVC/GRCh38_simpleRepeat.bed"
+bam_file: "reads.bam"                                            # Path to input BAM file
+reference_genome: "hg38.no_alt.fa.gz"      # Path to reference genome FASTA
+repeats: "GRCh38_simpleRepeat.bed"
 variant_config: "examples/variant_config.json"                                                 # Path to variant config
 
 # Output settings

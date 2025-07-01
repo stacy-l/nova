@@ -2,7 +2,7 @@
 Command line interface for Nova variant insertion simulator.
 """
 
-import click
+import rich_click as click
 import json
 import logging
 import random
@@ -16,6 +16,14 @@ from .read_selector import ReadSelector
 from .read_inserter import ReadInserter
 from .region_utils import RegionFilter, create_exclusion_filter_from_config
 
+def display_ascii():
+        print("""
+                    『 ° °*.ﾟ°*. ﾟ｡｡*･｡° °
+                     .ﾟ°*. ﾟ \033[1mnova\033[0m ﾟ｡｡*･｡
+                      ﾟ° ﾟ.ﾟ° ﾟ｡｡*･｡° ﾟ*° 』
+
+                \033[3ma de novo insertion simulator\033[0m
+        """)
 
 def setup_logging(verbose: bool = False) -> None:
     """
@@ -84,11 +92,9 @@ def _validate_config(config_file, logger):
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
 @click.pass_context
 def cli(ctx, verbose):
-    """nova: de novo variant insertion simulator."""
     ctx.ensure_object(dict)
     ctx.obj['verbose'] = verbose
     setup_logging(verbose) 
-
 
 @cli.command()
 @click.argument('bam_file', type=click.Path(exists=True))
@@ -119,16 +125,7 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
              min_distance_from_ends, random_seed, max_reads_per_window,
              disable_exclusion_regions):
     """
-    Run de novo variant insertion simulation.
-    Produces four output files:
-    - *_insertions.json: Insertion records
-    - *_modified_reads.fasta: Modified reads
-    - *_registry.json: Sequence registry
-    - *_statistics.json: Simulation statistics
-
-    Positional arguments:
-    bam_file: Path to input BAM file
-    config_file: Path to JSON configuration file (determines variants to simulate)
+    Simulate de novo insertions in reads.
     """
     logger = logging.getLogger(__name__)
 
@@ -219,11 +216,8 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
             all_reads_with_metadata, all_insertion_ids, str(records_file), str(sequences_file)
         ) # insertion records and sequences are written to files directly
         
-        # read_inserter.save_insertion_records(insertion_records, str(records_file))
-        # read_inserter.save_modified_sequences(modified_sequences, str(sequences_file))
+
         registry.save_to_json(str(registry_file))
-        
-        # insertion_stats = read_inserter.get_insertion_statistics(insertion_records)
         
         all_stats = {
             'input_parameters': {
@@ -266,6 +260,7 @@ def validate_config(config_file):
     _validate_config(config_file, logger)
 
 def main():
+    display_ascii()
     cli()
 
 if __name__ == '__main__':
