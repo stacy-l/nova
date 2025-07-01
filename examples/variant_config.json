@@ -35,8 +35,6 @@
     "spec": {"L1HS-5end": 30, 
     "L1HS-3end": 30,
     "L1HS_full": 40}
-  }},
-  "exclusion_regions": [
-    "/Users/stacy/sudmant/references/hg38_HGSVC/GRCh38_centromeres.bed"
-]
+  }}
+  ]
 }

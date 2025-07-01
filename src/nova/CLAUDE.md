@@ -57,38 +57,10 @@ Each utility function should include:
 - Example usage in docstring
 - Raised exceptions documented
 
-### 4. **Future-Oriented Design**
-Consider how the utility might be extended:
-```python
-# Current need: Compare two FASTA files
-def compare_fasta_content(fasta1_path: str, fasta2_path: str) -> Dict[str, Any]:
-
-# Future-oriented: Support multiple files
-def compare_multiple_fasta_files(fasta_paths: List[str]) -> Dict[str, Any]:
-```
-
 ## Current Utility Modules
 
 ### `sequence_utils.py`
 **Purpose**: FASTA file analysis and sequence comparison operations
-
-**Key Functions**:
-- `extract_sequence_content_hashes()` - Hash sequence content for comparison
-- `compare_fasta_content()` - Compare sequences between two FASTA files
-- `analyze_sequence_recovery()` - Variant calling validation metrics
-- `get_sequence_statistics()` - Basic sequence statistics
-
-**Use Cases**:
-- Output validation between different simulation methods
-- Variant calling performance assessment  
-- Sequence set analysis and comparison
-- Quality control and testing
-
-**Future Extensions**:
-- Support for different hash algorithms
-- Sequence clustering and similarity analysis
-- Integration with variant calling pipelines
-- Performance optimization for large files
 
 ## Implementation Checklist
 
@@ -122,48 +94,3 @@ from nova.sequence_utils import analyze_sequence_recovery
 - Unit tests go in `tests/test_<utility_name>.py`
 - Integration tests can import utilities as needed
 - Memory/performance scripts should use utilities for consistency
-
-### CLI Integration
-Consider whether utilities should be exposed via CLI commands:
-```bash
-# Future possibility
-nova compare-sequences file1.fasta file2.fasta
-nova analyze-recovery ground_truth.fasta detected.fasta
-```
-
-## Examples of Good Utility Identification
-
-### ✅ **sequence_utils.py Creation**
-**Original context**: Testing memory optimization equivalence
-**Utility insight**: Sequence comparison is fundamental to bioinformatics validation
-**Future applications**: 
-- Variant calling validation
-- Simulation comparison
-- Quality control pipelines
-- Cross-method benchmarking
-
-### ✅ **Future Opportunities**
-
-**BAM Processing Utilities** (`bam_utils.py`):
-- Read quality statistics
-- Coverage analysis
-- Region sampling utilities
-- Index validation
-
-**Statistical Analysis** (`stats_utils.py`):
-- Distribution comparisons
-- Performance metrics calculation
-- Significance testing
-- Benchmarking utilities
-
-**File Management** (`file_utils.py`):
-- Safe file operations with cleanup
-- Temporary directory management
-- Path validation and normalization
-- Format detection and validation
-
-## Conclusion
-
-The goal is to build a robust, extensible utility ecosystem that makes `nova` more powerful both as a simulation tool and as a foundation for genomics analysis workflows. When in doubt, err on the side of creating well-designed utilities that anticipate future needs.
-
-**Remember**: Good utilities turn one-off solutions into reusable building blocks that accelerate future development and enable new use cases we haven't thought of yet.

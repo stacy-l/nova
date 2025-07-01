@@ -14,7 +14,7 @@ from Bio.Seq import Seq
 from nova.variant_registry import VariantRegistry
 from nova.variant_generator import VariantGenerator
 from nova.read_inserter import ReadInserter
-from nova.read_selector import ReadMetadata, ReadSelector
+from nova.read_selector import ReadMetadata, ReadSelector, LazyReadReference
 
 
 class TestIntegration(unittest.TestCase):
@@ -69,53 +69,27 @@ class TestIntegration(unittest.TestCase):
                     self.query_sequence = sequence
                     self.query_length = length
             
-            mock_reads_with_metadata = [
-                (MockRead(f"read_{i}", "A" * 2000, 2000), 
-                 ReadMetadata(
-                     read_name=f"read_{i}",
-                     original_chr="chr1",
-                     original_pos=i * 1000,
-                     read_length=2000,
-                     mapq=30,
-                     gc_content=0.0,
-                     soft_clip_ratio=0.0
-                 ))
-                for i in range(4)
-            ]
+            # Create mock lazy read references
+            lazy_reads = []
+            for i in range(4):
+                lazy_ref = LazyReadReference(
+                    bam_path="test.bam",
+                    read_name=f"read_{i}",
+                    original_chr="chr1",
+                    original_pos=i * 1000,
+                    read_length=2000,
+                    mapq=30,
+                    gc_content=0.0,
+                    soft_clip_ratio=0.0
+                )
+                # Mock the get_sequence method to return test sequence
+                lazy_ref.get_sequence = lambda: "A" * 2000
+                lazy_reads.append(lazy_ref)
             
             # Test read insertion
             inserter = ReadInserter(registry, min_distance_from_ends=500, random_seed=42)
             
-            # Perform insertions
-            insertion_records, modified_sequences, skip_stats = inserter.insert_random_mode(mock_reads_with_metadata, insertion_ids)
-            
-            # Check skip statistics
-            self.assertEqual(skip_stats['total_attempted'], 4)
-            self.assertEqual(skip_stats['successful_insertions'], 4)
-            self.assertEqual(skip_stats['success_rate'], 1.0)
-            
-            # Verify insertions
-            self.assertEqual(len(insertion_records), 4)
-            self.assertEqual(len(modified_sequences), 4)
-            
-            # Check insertion records
-            for record in insertion_records:
-                self.assertIsInstance(record.base_read_name, str)
-                self.assertIsInstance(record.modified_read_name, str)
-                self.assertIsInstance(record.insertion_id, str)
-                self.assertGreater(record.insertion_pos, 500)
-                self.assertLess(record.insertion_pos, 1500)  # 2000 - 500
-                self.assertEqual(record.original_chr, "chr1")
-            
-            # Check modified sequences
-            for seq_record in modified_sequences:
-                self.assertGreater(len(seq_record.seq), 2000)  # Original + insertion
-            
-            # Test statistics
-            insertion_stats = inserter.get_insertion_statistics(insertion_records)
-            self.assertEqual(insertion_stats['total_insertions'], 4)
-            
-            # Test saving/loading
+            # Test saving/loading with streaming insertion
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_path = Path(temp_dir)
                 
@@ -124,15 +98,18 @@ class TestIntegration(unittest.TestCase):
                 registry.save_to_json(str(registry_file))
                 self.assertTrue(registry_file.exists())
                 
-                # Save insertion records
+                # Perform streaming insertions
                 records_file = temp_path / "records.json"
-                inserter.save_insertion_records(insertion_records, str(records_file))
-                self.assertTrue(records_file.exists())
-                
-                # Save modified sequences
                 sequences_file = temp_path / "sequences.fasta"
-                inserter.save_modified_sequences(modified_sequences, str(sequences_file))
+                
+                insertion_stats = inserter.insert_streaming(lazy_reads, insertion_ids, str(records_file), str(sequences_file))
+            
+                # Verify files were created
+                self.assertTrue(records_file.exists())
                 self.assertTrue(sequences_file.exists())
+                
+                # Test statistics
+                self.assertEqual(insertion_stats['total_insertions'], 4)
                 
                 # Verify file contents
                 with open(registry_file) as f:
@@ -145,6 +122,19 @@ class TestIntegration(unittest.TestCase):
                 
                 fasta_records = list(SeqIO.parse(sequences_file, "fasta"))
                 self.assertEqual(len(fasta_records), 4)
+                
+                # Check insertion records
+                for record in records_data:
+                    self.assertIsInstance(record['base_read_name'], str)
+                    self.assertIsInstance(record['modified_read_name'], str)
+                    self.assertIsInstance(record['insertion_id'], str)
+                    self.assertGreater(record['insertion_pos'], 500)
+                    self.assertLess(record['insertion_pos'], 1500)  # 2000 - 500
+                    self.assertEqual(record['original_chr'], "chr1")
+                
+                # Check modified sequences
+                for seq_record in fasta_records:
+                    self.assertGreater(len(seq_record.seq), 2000)  # Original + insertion
         
         finally:
             Path(temp_fasta).unlink()

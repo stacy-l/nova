@@ -1,23 +1,40 @@
 {
-  "random": {
-    "n": 20,
-    "length": 50,
-    "gc_content": 0.5
-  },
-  "simple": {
-    "n": 10,
-    "repeat": "CAG",
-    "units": 20
-  },
-  "predefined": {
-    "Alu": {
-      "fasta": "tests/test_data/test_sequences.fasta",
-      "spec": {
-        "AluYa5": 30,
-        "AluYb8": 20,
-        "L1HS_5end": 10,
-        "L1HS_3end": 10
-      }
+    "random": [{
+      "n": 100,
+      "length": 100,
+      "gc_content": 0.5
+    },
+    {
+      "n": 100,
+      "length": 200,
+      "gc_content": 0.5
     }
+    ],
+    "simple": [
+      {
+      "n": 100,
+      "repeat": "CAG",
+      "units": 20
+    }
+    ],
+    "predefined": [
+      {"Alu": {
+        "fasta": "predefined/dfam_AluY_homininae.fasta",
+        "spec": {
+          "AluYa5": 50,
+          "AluYb8": 30,
+          "AluYa8": 25,
+          "AluYb9": 15,
+          "AluYk11": 15,
+          "AluYk12": 15
+        }
+      }
+    },
+    {"L1HS": {
+      "fasta": "predefined/dfam_L1HS_homininae.fasta",
+      "spec": {"L1HS-5end": 10, 
+      "L1HS-3end": 15,
+      "L1HS_full": 20}
+    }}
+    ]
   }
-}

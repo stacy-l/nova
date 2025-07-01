@@ -15,10 +15,8 @@ Nova follows a modular architecture designed for extensibility and clear separat
 - `ReadMetadata`: Data class storing read properties
 
 **Key Methods**:
-- `_select_reads_unified()`: Window-based selection preventing clustering
-- `_get_chromosome_proportional_targets()`: Fair distribution across chromosomes
+- `_select_reads()`: Proportionally select reads across chromosomes 
 - `_passes_filters()`: Quality, length, and soft-clip filtering
-- `_calculate_gc_content()`: GC content analysis for reads
 
 **Critical Features**:
 - **Window-based limiting**: Prevents genomic clustering (max_reads_per_window)
@@ -46,6 +44,10 @@ Nova follows a modular architecture designed for extensibility and clear separat
 3. **Predefined**:
    - Loads from FASTA files
    - Supports Alu, LINE-1, custom sequences
+
+**Critical Features**:
+- **Point mutations**: Sequences can be mutated to a defined % divergence.
+(Substitution rates are currently equal for all substitutions.)
 
 ### 3. Variant Registry (`variant_registry.py`)
 
@@ -77,8 +79,7 @@ Nova follows a modular architecture designed for extensibility and clear separat
 
 **Key Methods**:
 - `insert_variant()`: Core insertion logic
-- `_find_optimal_position()`: Position selection algorithm
-- `_update_quality_scores()`: Maintains quality score consistency
+- `insert_streaming()`: Stream-based read modification and writing to records and sequence (FASTA) file.
 
 **Insertion Strategy**:
 - Random position selection within read
@@ -115,7 +116,7 @@ Nova follows a modular architecture designed for extensibility and clear separat
 
 ## Configuration System
 
-### Main Configuration (`variant_config.json`)
+### Main Configuration (`config.json`)
 ```json
 {
     "insertions": {
@@ -138,12 +139,15 @@ Nova follows a modular architecture designed for extensibility and clear separat
     }
 }
 ```
+See `examples/variant_config.json` for a more detailed example.
 
-### Pipeline Configuration (`snakemake_config.yml`)
+### Pipeline Configuration (`config.yml`)
 - Input/output paths
 - Resource allocation
 - Variant caller parameters
 - Analysis settings
+
+See `examples/snakemake_config.yml` for a more detailed example.
 
 ## Output Files
 
@@ -170,23 +174,6 @@ Nova follows a modular architecture designed for extensibility and clear separat
 - Read selection metrics
 - Variant generation summary
 - Processing performance data
-
-## Extension Points
-
-### Adding New Variant Types
-1. Extend `VariantGenerator` with new generation method
-2. Update configuration schema
-3. Add corresponding tests
-
-### Custom Read Filters
-1. Add filter method to `ReadSelector`
-2. Expose via CLI parameter
-3. Update documentation
-
-### Output Format Extensions
-1. Add writer method to output module
-2. Integrate into main workflow
-3. Update file manifest
 
 ## Performance Considerations
 
@@ -227,9 +214,8 @@ Nova follows a modular architecture designed for extensibility and clear separat
 4. Result analysis (custom scripts)
 
 ### Analysis Scripts
-- `analyze_vcf_results.py`: Detection validation
-- `analyze_false_positives.py`: FP categorization
-- `compare_nova_results.py`: Cross-run comparison
+- `analyze_vcf_results.py`: Analysis of `nova`-seeded variants and false positives.
+- `vcf_intersection.py`: Comparison of any two VCFs (i.e. base vs. simulation VCFs).
 
 ## Best Practices
 
@@ -250,17 +236,10 @@ Nova follows a modular architecture designed for extensibility and clear separat
 
 ## Future Architecture Considerations
 
-### Planned Enhancements
 1. Deletion/duplication support
 2. Complex variant patterns
 3. Multi-sample simulation
 4. Real-time progress tracking
-
-### Modular Extensions
-- Variant effect prediction
-- Read technology simulation
-- Quality score modeling
-- Coverage-aware selection
 
 ## Related Code References
 
