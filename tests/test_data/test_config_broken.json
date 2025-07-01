@@ -1,0 +1,20 @@
+{
+    "random": [{
+      "n": "10",
+      "length": 100,
+      "gc_content": 0.5
+    },
+    {
+      "n": 10,
+      "length": 200,
+      "gc_content": 0.5
+    }
+    ],
+    "simple": [
+      {
+      "n": 10,
+      "repeat": "CAG",
+      "units": 20
+    }
+    ]
+  }

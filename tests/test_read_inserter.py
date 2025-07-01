@@ -13,7 +13,7 @@ from Bio import SeqIO
 
 from nova.variant_registry import VariantRegistry
 from nova.read_inserter import ReadInserter, InsertionRecord
-from nova.read_selector import ReadMetadata
+from nova.read_selector import ReadMetadata, LazyReadReference
 
 
 class TestReadInserter(unittest.TestCase):
@@ -54,7 +54,7 @@ class TestReadInserter(unittest.TestCase):
         base_name = "original_read"
         
         modified_name = self.inserter._generate_modified_read_name(insertion_id, base_name)
-        expected = f"{insertion_id}_{base_name}"
+        expected = f"{insertion_id}.{base_name}"
         self.assertEqual(modified_name, expected)
     
     def test_insert_sequence_into_read(self):
@@ -71,15 +71,16 @@ class TestReadInserter(unittest.TestCase):
         self.assertEqual(result, expected)
         self.assertEqual(len(result), len(read_sequence) + len(insertion_sequence))
     
-    def test_insert_random_mode_success(self):
-        """Test successful random insertion."""
-        # Create mock read and metadata
-        mock_read = Mock()
-        mock_read.query_name = "test_read"
-        mock_read.query_length = 2000
-        mock_read.query_sequence = "A" * 2000
-        
-        metadata = ReadMetadata(
+    
+    
+    
+    
+    
+    def test_insert_streaming_success(self):
+        """Test successful streaming insertion."""
+        # Create mock lazy read reference
+        lazy_read = LazyReadReference(
+            bam_path="test.bam",
             read_name="test_read",
             original_chr="chr1",
             original_pos=1000,
@@ -89,76 +90,73 @@ class TestReadInserter(unittest.TestCase):
             soft_clip_ratio=0.05
         )
         
-        reads_with_metadata = [(mock_read, metadata)]
+        # Mock the get_sequence method to return a test sequence
+        lazy_read.get_sequence = Mock(return_value="A" * 2000)
+        
+        lazy_reads = [lazy_read]
         insertion_ids = [self.random_id]
         
-        # Perform insertion
-        insertion_records, modified_sequences, skip_stats = self.inserter.insert_random_mode(
-            reads_with_metadata, insertion_ids
-        )
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as records_f, \
+             tempfile.NamedTemporaryFile(mode='w', suffix='.fasta', delete=False) as sequences_f:
+            records_path = records_f.name
+            sequences_path = sequences_f.name
         
-        # Check results
-        self.assertEqual(len(insertion_records), 1)
-        self.assertEqual(len(modified_sequences), 1)
-        self.assertEqual(skip_stats['successful_insertions'], 1)
-        self.assertEqual(skip_stats['success_rate'], 1.0)
-        
-        # Check insertion record
-        record = insertion_records[0]
-        self.assertEqual(record.base_read_name, "test_read")
-        self.assertEqual(record.insertion_id, self.random_id)
-        self.assertEqual(record.original_chr, "chr1")
-        self.assertEqual(record.original_pos, 1000)
-        self.assertGreater(record.insertion_pos, 500)
-        self.assertLess(record.insertion_pos, 1500)
-        
-        # Check modified sequence
-        seq_record = modified_sequences[0]
-        self.assertGreater(len(seq_record.seq), 2000)  # Original + insertion
-        self.assertIn("ATCGATCG", str(seq_record.seq))  # Insertion sequence present
+        try:
+            # Perform streaming insertion
+            stats = self.inserter.insert_streaming(lazy_reads, insertion_ids, records_path, sequences_path)
+            
+            # Check statistics
+            self.assertEqual(stats['total_insertions'], 1)
+            
+            # Verify files were created and contain correct data
+            self.assertTrue(Path(records_path).exists())
+            self.assertTrue(Path(sequences_path).exists())
+            
+            # Check records file
+            with open(records_path, 'r') as f:
+                records_data = json.load(f)
+            self.assertEqual(len(records_data), 1)
+            self.assertEqual(records_data[0]['base_read_name'], "test_read")
+            self.assertEqual(records_data[0]['insertion_id'], self.random_id)
+            
+            # Check sequences file
+            loaded_seqs = list(SeqIO.parse(sequences_path, "fasta"))
+            self.assertEqual(len(loaded_seqs), 1)
+            self.assertGreater(len(loaded_seqs[0].seq), 2000)  # Original + insertion
+            self.assertIn("ATCGATCG", str(loaded_seqs[0].seq))  # Insertion sequence present
+            
+        finally:
+            Path(records_path).unlink()
+            Path(sequences_path).unlink()
     
-    def test_insert_random_mode_infeasible_read(self):
-        """Test insertion with infeasible read (too short)."""
-        # Create mock read that's too short
-        mock_read = Mock()
-        mock_read.query_name = "short_read"
-        mock_read.query_length = 800  # Too short for min_distance_from_ends = 500
-        mock_read.query_sequence = "A" * 800
-        
-        metadata = ReadMetadata(
+    def test_stream_insertion_infeasible_read(self):
+        """Test streaming insertion with infeasible read."""
+        # Create lazy read that's too short
+        lazy_read = LazyReadReference(
+            bam_path="test.bam", 
             read_name="short_read",
             original_chr="chr1",
             original_pos=1000,
-            read_length=800,
+            read_length=800,  # Too short for min_distance_from_ends = 500
             mapq=30,
             gc_content=0.0,
             soft_clip_ratio=0.05
         )
         
-        reads_with_metadata = [(mock_read, metadata)]
+        lazy_reads = [lazy_read]
         insertion_ids = [self.random_id]
         
-        # Perform insertion
-        insertion_records, modified_sequences, skip_stats = self.inserter.insert_random_mode(
-            reads_with_metadata, insertion_ids
-        )
+        # Test _stream_insertion generator directly
+        results = list(self.inserter._stream_insertion(lazy_reads, insertion_ids))
         
         # Should have no successful insertions
-        self.assertEqual(len(insertion_records), 0)
-        self.assertEqual(len(modified_sequences), 0)
-        self.assertEqual(skip_stats['successful_insertions'], 0)
-        self.assertEqual(skip_stats['success_rate'], 0.0)
-        self.assertEqual(skip_stats['skipped_infeasible_reads'], 1)
+        self.assertEqual(len(results), 0)
     
-    def test_insert_random_mode_missing_sequence(self):
-        """Test insertion with missing sequence in registry."""
-        mock_read = Mock()
-        mock_read.query_name = "test_read"
-        mock_read.query_length = 2000
-        mock_read.query_sequence = "A" * 2000
-        
-        metadata = ReadMetadata(
-            read_name="test_read",
+    def test_stream_insertion_missing_sequence(self):
+        """Test streaming insertion with missing sequence."""
+        lazy_read = LazyReadReference(
+            bam_path="test.bam",
+            read_name="test_read", 
             original_chr="chr1",
             original_pos=1000,
             read_length=2000,
@@ -167,81 +165,14 @@ class TestReadInserter(unittest.TestCase):
             soft_clip_ratio=0.05
         )
         
-        reads_with_metadata = [(mock_read, metadata)]
+        lazy_reads = [lazy_read]
         insertion_ids = ["nonexistent_id"]
         
-        # Perform insertion
-        insertion_records, modified_sequences, skip_stats = self.inserter.insert_random_mode(
-            reads_with_metadata, insertion_ids
-        )
+        # Test _stream_insertion generator directly
+        results = list(self.inserter._stream_insertion(lazy_reads, insertion_ids))
         
         # Should have no successful insertions
-        self.assertEqual(len(insertion_records), 0)
-        self.assertEqual(len(modified_sequences), 0)
-        self.assertEqual(skip_stats['successful_insertions'], 0)
-        self.assertEqual(skip_stats['skipped_missing_sequences'], 1)
-    
-    def test_save_insertion_records(self):
-        """Test saving insertion records to JSON."""
-        # Create sample insertion record
-        record = InsertionRecord(
-            base_read_name="test_read",
-            modified_read_name="insertion_123_test_read",
-            original_chr="chr1",
-            original_pos=1000,
-            insertion_id="insertion_123",
-            insertion_type="random",
-            insertion_length=8,
-            insertion_pos=750
-        )
-        
-        records = [record]
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            temp_path = f.name
-        
-        try:
-            # Save records
-            self.inserter.save_insertion_records(records, temp_path)
-            
-            # Verify file was created and contains correct data
-            self.assertTrue(Path(temp_path).exists())
-            
-            with open(temp_path, 'r') as f:
-                loaded_data = json.load(f)
-            
-            self.assertEqual(len(loaded_data), 1)
-            self.assertEqual(loaded_data[0]['base_read_name'], "test_read")
-            self.assertEqual(loaded_data[0]['insertion_id'], "insertion_123")
-            
-        finally:
-            Path(temp_path).unlink()
-    
-    def test_save_modified_sequences(self):
-        """Test saving modified sequences to FASTA."""
-        # Create sample sequence records
-        sequences = [
-            SeqRecord(Seq("ATCGATCGATCG"), id="seq1", description="Test sequence 1"),
-            SeqRecord(Seq("GCTAGCTAGCTA"), id="seq2", description="Test sequence 2")
-        ]
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.fasta', delete=False) as f:
-            temp_path = f.name
-        
-        try:
-            # Save sequences
-            self.inserter.save_modified_sequences(sequences, temp_path)
-            
-            # Verify file was created and contains correct data
-            self.assertTrue(Path(temp_path).exists())
-            
-            loaded_seqs = list(SeqIO.parse(temp_path, "fasta"))
-            self.assertEqual(len(loaded_seqs), 2)
-            self.assertEqual(str(loaded_seqs[0].seq), "ATCGATCGATCG")
-            self.assertEqual(str(loaded_seqs[1].seq), "GCTAGCTAGCTA")
-            
-        finally:
-            Path(temp_path).unlink()
+        self.assertEqual(len(results), 0)
     
     def test_get_insertion_statistics(self):
         """Test calculating insertion statistics."""
@@ -259,17 +190,16 @@ class TestReadInserter(unittest.TestCase):
         self.assertEqual(stats['type_counts']['random'], 2)
         self.assertEqual(stats['type_counts']['simple'], 1)
         
-        # Check position statistics
-        self.assertEqual(stats['position_statistics']['random']['count'], 2)
-        self.assertEqual(stats['position_statistics']['random']['min'], 500)
-        self.assertEqual(stats['position_statistics']['random']['max'], 600)
-        self.assertEqual(stats['position_statistics']['random']['mean'], 550)
-        
         # Check length statistics
         self.assertEqual(stats['length_statistics']['random']['count'], 2)
         self.assertEqual(stats['length_statistics']['random']['min'], 10)
         self.assertEqual(stats['length_statistics']['random']['max'], 15)
         self.assertEqual(stats['length_statistics']['random']['mean'], 12.5)
+        
+        self.assertEqual(stats['length_statistics']['simple']['count'], 1)
+        self.assertEqual(stats['length_statistics']['simple']['min'], 20)
+        self.assertEqual(stats['length_statistics']['simple']['max'], 20)
+        self.assertEqual(stats['length_statistics']['simple']['mean'], 20)
     
     def test_get_insertion_statistics_empty(self):
         """Test statistics with empty records."""

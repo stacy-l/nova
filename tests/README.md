@@ -4,8 +4,7 @@ This directory contains test files for `nova`'s test suite.
 
 ## Provided Files
 
-1. **test_sequences.fasta** - Sample FASTA file containing Alu and LINE elements for predefined insertion testing
-2. **test_config.json** - Sample configuration file for integration testing
+The `tests/test_data` directory contains several sample configuration files (`test_config_*.json`) for test use.
 
 ## Required Files for Full Testing
 
@@ -22,10 +21,6 @@ For complete integration testing, you'll need to provide the following files:
 Store these files at:
 - `tests/test_data/test_reads.bam`
 - `tests/test_data/test_reads.bam.bai`
-
-### Alternative: Mock Testing
-
-Most tests use mocked pysam objects to avoid requiring actual BAM files. Only integration tests that specifically test BAM file reading will need real BAM files.
 
 ## Running Tests
 

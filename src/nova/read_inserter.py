@@ -108,102 +108,6 @@ class ReadInserter:
                 insertion_sequence + 
                 read_sequence[insertion_pos:])
     
-    def insert_random_mode(self, reads_with_metadata: List[Tuple[pysam.AlignedSegment, ReadMetadata]],
-                          insertion_ids: List[str]) -> Tuple[List[InsertionRecord], List[SeqRecord]]:
-        """
-        Insert sequences into reads using random positioning.
-        
-        Args:
-            reads_with_metadata: List of (read, metadata) tuples
-            insertion_ids: List of insertion IDs to use
-            
-        Returns:
-            Tuple of (insertion_records, modified_sequences, skip_statistics)
-        """
-        if len(reads_with_metadata) != len(insertion_ids):
-            raise ValueError(f"Number of reads ({len(reads_with_metadata)}) must match "
-                           f"number of insertions ({len(insertion_ids)})")
-        
-        insertion_records = []
-        modified_sequences = []
-        skipped_missing_sequences = []
-        skipped_infeasible_reads = []
-        
-        for (read, metadata), insertion_id in zip(reads_with_metadata, insertion_ids):
-            insertion_seq = self.registry.get_sequence(insertion_id)
-            if insertion_seq is None:
-                self.logger.error(f"Insertion sequence {insertion_id} not found in registry")
-                skipped_missing_sequences.append(insertion_id)
-                continue
-            
-            insertion_pos = self._get_valid_insertion_position(
-                read.query_length, insertion_seq.insertion_length
-            )
-            
-            if insertion_pos is None:
-                self.logger.warning(f"Skipping read {read.query_name}: no valid insertion position "
-                                  f"(read_length={read.query_length}, insertion_length={insertion_seq.insertion_length}, "
-                                  f"min_distance_required={self.min_distance_from_ends * 2})")
-                skipped_infeasible_reads.append({
-                    'base_read_name': read.query_name,
-                    'read_length': read.query_length,
-                    'insertion_length': insertion_seq.insertion_length,
-                    'insertion_id': insertion_id
-                })
-                continue
-            
-            base_read_name = read.query_name
-            modified_read_name = self._generate_modified_read_name(insertion_id, base_read_name)
-            
-            original_sequence = read.query_sequence
-            modified_sequence = self._insert_sequence_into_read(
-                original_sequence, insertion_seq.sequence, insertion_pos
-            )
-            
-            insertion_record = InsertionRecord(
-                base_read_name=base_read_name,
-                modified_read_name=modified_read_name,
-                original_chr=metadata.original_chr,
-                original_pos=metadata.original_pos,
-                insertion_id=insertion_id,
-                insertion_type=insertion_seq.insertion_type,
-                insertion_length=insertion_seq.insertion_length,
-                insertion_pos=insertion_pos
-            )
-            
-            insertion_records.append(insertion_record)
-            
-            seq_record = SeqRecord(
-                Seq(modified_sequence),
-                id=modified_read_name,
-                description=""
-            )
-            modified_sequences.append(seq_record)
-        
-        total_attempted = len(reads_with_metadata)
-        successful_insertions = len(insertion_records)
-        success_rate = successful_insertions / total_attempted if total_attempted > 0 else 0
-        
-        self.logger.info(f"Insertion summary: {successful_insertions}/{total_attempted} successful "
-                        f"({success_rate:.2%} success rate)")
-        
-        if skipped_missing_sequences:
-            self.logger.warning(f"Skipped {len(skipped_missing_sequences)} pairs due to missing sequences: "
-                              f"{', '.join(set(skipped_missing_sequences))}")
-        
-        if skipped_infeasible_reads:
-            self.logger.warning(f"Skipped {len(skipped_infeasible_reads)} pairs due to insufficient space")
-        
-        skip_stats = {
-            'total_attempted': total_attempted,
-            'successful_insertions': successful_insertions,
-            'success_rate': success_rate,
-            'skipped_missing_sequences': len(skipped_missing_sequences),
-            'skipped_infeasible_reads': len(skipped_infeasible_reads)
-        }
-        
-        return insertion_records, modified_sequences, skip_stats
-    
     def _stream_insertion(self, lazy_reads: List[LazyReadReference], 
                             insertion_ids: List[str]):
         """
@@ -291,7 +195,7 @@ class ReadInserter:
         # Log final statistics
         success_rate = successful_insertions / total_attempted if total_attempted > 0 else 0
         
-        self.logger.info(f"Streaming insertion summary: {successful_insertions}/{total_attempted} successful "
+        self.logger.info(f"Insertion summary: {successful_insertions}/{total_attempted} successful "
                         f"({success_rate:.2%} success rate)")
         
         if skipped_missing_sequences:
@@ -300,36 +204,6 @@ class ReadInserter:
         
         if skipped_infeasible_reads:
             self.logger.warning(f"Skipped {len(skipped_infeasible_reads)} pairs due to insufficient space or fetch failures")
-    
-    def save_insertion_records(self, insertion_records: List[InsertionRecord], 
-                             output_path: str) -> None:
-        """
-        Save insertion records to JSON file.
-        
-        Args:
-            insertion_records: List of insertion records
-            output_path: Path to output JSON file
-        """
-        records_data = [record.to_dict() for record in insertion_records]
-        
-        with open(output_path, 'w') as f:
-            json.dump(records_data, f, indent=2)
-        
-        self.logger.info(f"Saved {len(insertion_records)} insertion records to {output_path}")
-    
-    def save_modified_sequences(self, modified_sequences: List[SeqRecord], 
-                              output_path: str) -> None:
-        """
-        Save modified sequences to FASTA file.
-        
-        Args:
-            modified_sequences: List of modified sequence records
-            output_path: Path to output FASTA file
-        """
-        with open(output_path, 'w') as f:
-            SeqIO.write(modified_sequences, f, "fasta")
-        
-        self.logger.info(f"Saved {len(modified_sequences)} modified sequences to {output_path}")
     
     def insert_streaming(self, lazy_reads: List[LazyReadReference], 
                              insertion_ids: List[str],
@@ -374,7 +248,7 @@ class ReadInserter:
         if insertion_records:
             insertion_stats = self.get_insertion_statistics(insertion_records)
         
-        self.logger.info(f"Streaming results saved: {len(insertion_records)} records to {records_path}, "
+        self.logger.info(f"Results saved: {len(insertion_records)} records to {records_path}, "
                         f"{sequences_written} sequences to {sequences_path}")
         
         return insertion_stats
