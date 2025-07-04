@@ -6,7 +6,8 @@ checking to support region-targeted read selection in Nova.
 """
 
 import logging
-from typing import List, Optional, Dict, Any
+import random
+from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 import pyranges as pr
 import pandas as pd
@@ -302,3 +303,235 @@ def create_exclusion_filter_from_config(exclusion_bed_paths: List[str]) -> Optio
     else:
         logger.warning("No valid exclusion BED files found")
         return None
+
+
+class RegionAwareWindowGenerator:
+    """
+    Generates sampling windows that respect inclusion/exclusion regions.
+    
+    This class pre-computes valid genomic regions based on BED files and generates
+    random sampling windows only within those valid regions, eliminating the need
+    for per-read region checking.
+    """
+    
+    def __init__(self, bam_path: str):
+        """
+        Initialize the window generator.
+        
+        Args:
+            bam_path: Path to BAM file for chromosome information
+        """
+        self.bam_path = bam_path
+        self.logger = logging.getLogger(__name__)
+        self._valid_regions_cache = {}  # Cache computed valid regions
+        self._genome_regions = None     # Lazy-loaded genome-wide regions
+    
+    def _load_genome_regions(self) -> pr.PyRanges:
+        """
+        Load genome-wide regions from BAM file.
+        
+        Returns:
+            PyRanges object covering entire genome
+        """
+        if self._genome_regions is not None:
+            return self._genome_regions
+        
+        import pysam
+        genome_data = {'Chromosome': [], 'Start': [], 'End': []}
+        
+        with pysam.AlignmentFile(self.bam_path, "rb") as bam:
+            for chrom, length in zip(bam.references, bam.lengths):
+                genome_data['Chromosome'].append(chrom)
+                genome_data['Start'].append(0)
+                genome_data['End'].append(length)
+        
+        self._genome_regions = pr.from_dict(genome_data)
+        self.logger.debug(f"Loaded genome regions for {len(self._genome_regions)} chromosomes")
+        return self._genome_regions
+    
+    def _make_cache_key(self, target_regions: Optional[RegionFilter], 
+                       exclusion_regions: Optional[RegionFilter]) -> str:
+        """
+        Create a cache key for the region combination.
+        
+        Args:
+            target_regions: Target/inclusion regions
+            exclusion_regions: Exclusion regions
+            
+        Returns:
+            String cache key
+        """
+        # Handle None and empty regions consistently
+        def get_region_key(region_filter):
+            if region_filter is None or len(region_filter) == 0:
+                return "none"
+            else:
+                return str(id(region_filter))
+        
+        target_id = get_region_key(target_regions)
+        exclusion_id = get_region_key(exclusion_regions)
+        return f"{target_id}_{exclusion_id}"
+    
+    def get_valid_regions(self, target_regions: Optional[RegionFilter], 
+                         exclusion_regions: Optional[RegionFilter]) -> pr.PyRanges:
+        """
+        Compute valid regions based on inclusion/exclusion filters.
+        
+        Args:
+            target_regions: Optional inclusion regions
+            exclusion_regions: Optional exclusion regions
+            
+        Returns:
+            PyRanges object containing all valid regions
+        """
+        cache_key = self._make_cache_key(target_regions, exclusion_regions)
+        
+        if cache_key in self._valid_regions_cache:
+            self.logger.debug("Using cached valid regions")
+            return self._valid_regions_cache[cache_key]
+        
+        self.logger.info("Computing valid regions from filters")
+        
+        # Determine base regions
+        if target_regions and len(target_regions) > 0:
+            # Start with target regions
+            valid_regions = target_regions.regions
+            self.logger.debug(f"Starting with {len(valid_regions)} target regions")
+        else:
+            # Start with whole genome
+            valid_regions = self._load_genome_regions()
+            self.logger.debug(f"Starting with whole genome ({len(valid_regions)} chromosomes)")
+        
+        # Apply exclusions
+        if exclusion_regions and len(exclusion_regions) > 0:
+            original_length = (valid_regions.End - valid_regions.Start).sum()
+            valid_regions = valid_regions.subtract(exclusion_regions.regions)
+            final_length = (valid_regions.End - valid_regions.Start).sum() if len(valid_regions) > 0 else 0
+            
+            self.logger.info(f"After applying exclusions: {final_length:,}/{original_length:,} bp remain "
+                           f"({100*final_length/original_length:.1f}%)")
+        
+        # Cache the result
+        self._valid_regions_cache[cache_key] = valid_regions
+        
+        # Log statistics
+        if len(valid_regions) > 0:
+            total_length = (valid_regions.End - valid_regions.Start).sum()
+            num_regions = len(valid_regions)
+            chromosomes = len(valid_regions.Chromosome.unique())
+            self.logger.info(f"Valid regions: {num_regions} regions across {chromosomes} chromosomes, "
+                           f"total {total_length:,} bp")
+        else:
+            self.logger.warning("No valid regions after applying filters!")
+        
+        return valid_regions
+    
+    def calculate_required_windows(self, n_reads: int, reads_per_window: int) -> int:
+        """
+        Calculate the number of windows needed for the requested reads.
+        
+        Args:
+            n_reads: Number of reads to select
+            reads_per_window: Number of reads per window
+            
+        Returns:
+            Number of windows required
+        """
+        import math
+        return math.ceil(n_reads / reads_per_window)
+    
+    def generate_windows_for_regions(self, valid_regions: pr.PyRanges, n_windows: int, 
+                                   window_size: int, seed: Optional[int] = None) -> List[Tuple[str, int, int]]:
+        """
+        Generate sampling windows within valid regions.
+        
+        Args:
+            valid_regions: PyRanges object with valid genomic regions
+            n_windows: Number of windows to generate
+            window_size: Size of each window in base pairs
+            seed: Random seed for reproducibility
+            
+        Returns:
+            List of (chromosome, start, end) tuples
+        """
+        if len(valid_regions) == 0:
+            self.logger.error("Cannot generate windows from empty regions")
+            return []
+        
+        # Set random seed if provided
+        if seed is not None:
+            random.seed(seed)
+        
+        # Convert PyRanges to list of regions for easier manipulation
+        regions_df = valid_regions.df
+        regions_list = []
+        for _, row in regions_df.iterrows():
+            length = row['End'] - row['Start']
+            regions_list.append({
+                'chr': row['Chromosome'],
+                'start': row['Start'],
+                'end': row['End'],
+                'length': length
+            })
+        
+        # Calculate total valid length
+        total_length = sum(r['length'] for r in regions_list)
+        
+        # Allocate windows proportionally to each region
+        windows_per_region = []
+        allocated = 0
+        
+        for region in regions_list:
+            proportion = region['length'] / total_length
+            region_windows = int(proportion * n_windows)
+            windows_per_region.append(region_windows)
+            allocated += region_windows
+        
+        # Distribute remaining windows to largest regions
+        remaining = n_windows - allocated
+        if remaining > 0:
+            # Sort by region length descending
+            sorted_indices = sorted(range(len(regions_list)), 
+                                  key=lambda i: regions_list[i]['length'], 
+                                  reverse=True)
+            
+            for i in range(min(remaining, len(sorted_indices))):
+                windows_per_region[sorted_indices[i]] += 1
+        
+        # Generate windows within each region
+        all_windows = []
+        
+        for region, num_windows in zip(regions_list, windows_per_region):
+            if num_windows == 0:
+                continue
+            
+            region_length = region['length']
+            
+            # Handle regions smaller than window size
+            if region_length < window_size:
+                # Use the entire region as a window
+                for _ in range(num_windows):
+                    all_windows.append((region['chr'], region['start'], region['end']))
+                self.logger.debug(f"Region {region['chr']}:{region['start']}-{region['end']} "
+                               f"smaller than window size, using entire region")
+            else:
+                # Generate random windows within the region
+                for _ in range(num_windows):
+                    max_start = region['end'] - window_size
+                    start = random.randint(region['start'], max_start)
+                    end = start + window_size
+                    all_windows.append((region['chr'], start, end))
+        
+        # Shuffle windows to avoid chromosome ordering bias
+        random.shuffle(all_windows)
+        
+        self.logger.info(f"Generated {len(all_windows)} windows from {len(regions_list)} valid regions")
+        
+        # Log chromosome distribution
+        chr_counts = {}
+        for chr, _, _ in all_windows:
+            chr_counts[chr] = chr_counts.get(chr, 0) + 1
+        
+        self.logger.debug(f"Window distribution: {dict(sorted(chr_counts.items()))}")
+        
+        return all_windows

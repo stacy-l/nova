@@ -678,7 +678,7 @@ def generate_detailed_summary_report(nova_variants, categories, type_detection, 
     total_expected = sum(expected_counts.values())
 
     print(f"\nExpected variants with nova reads: {total_expected}")
-    print(f"\nTotal variants with nova reads: {categories['summary']['total_variants']}")
+    print(f"Total variants with nova reads: {categories['summary']['total_variants']}")
     
     print("\n1. TRUE POSITIVES (Single nova with correct mapping):")
     tp_exclusive = len(categories['true_positives']['exclusive'])
@@ -1266,13 +1266,17 @@ def generate_detailed_summary_json(categories, expected_counts, read_to_variants
         'true_positives': {
             'total': tp_total,
             'exclusive': len(categories['true_positives']['exclusive']),
-            'shared': len(categories['true_positives']['shared']),
-            'detection_rate': (tp_total / total_expected * 100) if total_expected > 0 else 0
+            'shared': len(categories['true_positives']['shared'])
         },
         'false_positives': {
             'total': fp_total,
             'mapping_errors': len(categories['false_positives']['mapping_error']),
             'multi_read_variants': len(categories['false_positives']['multi_read'])
+        },
+        'performance_metrics': {
+            'recall_percent': (tp_total / total_expected * 100) if total_expected > 0 else 0,
+            'precision_percent': (tp_total / (tp_total + fp_total) * 100) if (tp_total + fp_total) > 0 else 0,
+            'f1_score': (2 * tp_total / (2 * tp_total + fp_total + (total_expected - tp_total))) if (2 * tp_total + fp_total + (total_expected - tp_total)) > 0 else 0
         },
         'variant_characteristics': {
             'by_svtype': dict(categories['summary']['by_svtype']),
