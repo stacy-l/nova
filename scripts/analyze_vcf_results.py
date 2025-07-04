@@ -88,6 +88,20 @@ def identify_nova_variants(df):
     print(f"Found {len(nova_variants)} variants with nova reads!")
     return nova_variants
 
+def track_nova_read_usage(nova_variants):
+    """Track which nova reads appear in multiple variant calls.
+    
+    Returns:
+        Dict mapping nova read names to list of variant indices where they appear
+    """
+    read_to_variants = defaultdict(list)
+    
+    for variant in nova_variants:
+        for read_name in variant['nova_read_names']:
+            read_to_variants[read_name].append(variant['index'])
+    
+    return read_to_variants
+
 def categorize_variant(variant):
     """Categorize a single variant and return all its categories."""
     support_reads = variant['support_reads']
@@ -172,6 +186,110 @@ def categorize_variants(nova_variants, mapping_verification=None):
                     categories['single_read_calls']['single_nova_only_incorrect_mapping'] += 1
                 else:
                     categories['single_read_calls']['single_nova_only_unknown_mapping'] += 1
+    
+    return categories
+
+def categorize_variants_detailed(nova_variants, mapping_verification, read_to_variants=None):
+    """Categorize variants using detailed true/false positive definitions.
+    
+    True Positives: Single nova read variants with correct mapping
+      - Exclusive: Nova read only appears in this variant
+      - Shared: Nova read also appears in other variants
+      
+    False Positives:
+      - Mapping Error: Single nova read with incorrect mapping
+      - Multi-read: Multiple reads including nova reads
+    
+    Args:
+        nova_variants: List of variants containing nova reads
+        mapping_verification: Dict mapping read names to verification status
+        read_to_variants: Optional pre-computed read usage tracking
+        
+    Returns:
+        Dict with refined categorization
+    """
+    # Track nova read usage if not provided
+    if read_to_variants is None:
+        read_to_variants = track_nova_read_usage(nova_variants)
+    
+    categories = {
+        'true_positives': {
+            'exclusive': [],      # Single nova, correct mapping, not used elsewhere
+            'shared': [],         # Single nova, correct mapping, used elsewhere
+            'total': 0
+        },
+        'false_positives': {
+            'mapping_error': [],  # Single nova, incorrect mapping
+            'multi_read': [],     # Multiple reads including nova
+            'total': 0
+        },
+        'summary': {
+            'total_variants': len(nova_variants),
+            'by_svtype': defaultdict(int),
+            'by_precision': defaultdict(int)
+        }
+    }
+    
+    # Categorize each variant
+    for variant in nova_variants:
+        support_reads = variant['support_reads']
+        nova_reads = variant['nova_reads']
+        nova_read_names = variant['nova_read_names']
+        
+        # Track basic stats
+        categories['summary']['by_svtype'][variant['SVTYPE']] += 1
+        categories['summary']['by_precision']['PRECISE' if variant['PRECISE'] else 'IMPRECISE'] += 1
+        
+        # Single nova read variant
+        if support_reads == 1 and nova_reads == 1:
+            nova_read_name = nova_read_names[0]
+            mapping_status = mapping_verification.get(nova_read_name, 'unknown')
+            
+            # Check if read is used in multiple variants
+            read_usage_count = len(read_to_variants.get(nova_read_name, []))
+            is_shared = read_usage_count > 1
+            
+            if mapping_status == 'correct_mapping':
+                # True positive
+                variant_info = variant.copy()
+                variant_info['mapping_status'] = mapping_status
+                variant_info['is_shared'] = is_shared
+                variant_info['usage_count'] = read_usage_count
+                variant_info['used_in_variants'] = read_to_variants.get(nova_read_name, [])
+                
+                if is_shared:
+                    categories['true_positives']['shared'].append(variant_info)
+                else:
+                    categories['true_positives']['exclusive'].append(variant_info)
+                    
+                categories['true_positives']['total'] += 1
+                
+            else:
+                # False positive - mapping error
+                variant_info = variant.copy()
+                variant_info['mapping_status'] = mapping_status
+                variant_info['category'] = 'mapping_error'
+                
+                categories['false_positives']['mapping_error'].append(variant_info)
+                categories['false_positives']['total'] += 1
+                
+        else:
+            # Multi-read variant (false positive)
+            variant_info = variant.copy()
+            variant_info['category'] = 'multi_read'
+            variant_info['nova_fraction'] = nova_reads / support_reads
+            
+            # Track nova read sharing for multi-read variants too
+            shared_nova_reads = []
+            for read_name in nova_read_names:
+                if len(read_to_variants.get(read_name, [])) > 1:
+                    shared_nova_reads.append(read_name)
+            
+            variant_info['shared_nova_reads'] = shared_nova_reads
+            variant_info['has_shared_nova_reads'] = len(shared_nova_reads) > 0
+            
+            categories['false_positives']['multi_read'].append(variant_info)
+            categories['false_positives']['total'] += 1
     
     return categories
 
@@ -549,6 +667,114 @@ def calculate_expected_counts(insertions_data):
     
     return dict(type_counts)
 
+def generate_detailed_summary_report(nova_variants, categories, type_detection, insertions_data, read_to_variants, size_comparisons=None):
+    """Generate a comprehensive summary report using detailed categorization."""
+    print("\n" + "="*60)
+    print("NOVA VARIANT DETECTION ANALYSIS")
+    print("="*60)
+    
+    # Calculate expected counts from insertions data
+    expected_counts = calculate_expected_counts(insertions_data)
+    total_expected = sum(expected_counts.values())
+
+    print(f"\nExpected variants with nova reads: {total_expected}")
+    print(f"\nTotal variants with nova reads: {categories['summary']['total_variants']}")
+    
+    print("\n1. TRUE POSITIVES (Single nova with correct mapping):")
+    tp_exclusive = len(categories['true_positives']['exclusive'])
+    tp_shared = len(categories['true_positives']['shared'])
+    tp_total = categories['true_positives']['total']
+    
+    print(f"   Exclusive (nova read unique to variant): {tp_exclusive}")
+    print(f"   Shared (nova read in multiple variants): {tp_shared}")
+    print(f"   TOTAL TRUE POSITIVES: {tp_total}")
+    
+    # Analyze shared reads
+    if tp_shared > 0:
+        shared_variants = categories['true_positives']['shared']
+        avg_usage = np.mean([v['usage_count'] for v in shared_variants])
+        max_usage = max(v['usage_count'] for v in shared_variants)
+        print(f"   - Average usage per shared read: {avg_usage:.1f}")
+        print(f"   - Maximum usage count: {max_usage}")
+    
+    print("\n2. FALSE POSITIVES:")
+    fp_mapping = len(categories['false_positives']['mapping_error'])
+    fp_multi = len(categories['false_positives']['multi_read'])
+    fp_total = categories['false_positives']['total']
+    
+    print(f"   Mapping errors (single nova, wrong position): {fp_mapping}")
+    print(f"   Multi-read variants: {fp_multi}")
+    print(f"   TOTAL FALSE POSITIVES: {fp_total}")
+    
+    # Analyze multi-read variants
+    if fp_multi > 0:
+        multi_variants = categories['false_positives']['multi_read']
+        with_shared = sum(1 for v in multi_variants if v['has_shared_nova_reads'])
+        avg_nova_fraction = np.mean([v['nova_fraction'] for v in multi_variants])
+        print(f"   - Multi-read variants with shared nova reads: {with_shared}")
+        print(f"   - Average nova fraction in multi-read variants: {avg_nova_fraction:.2f}")
+
+    print("\n3. PERFORMANCE METRICS:")
+    print(f"   RECALL: {tp_total}/{total_expected} ({tp_total/total_expected*100:.1f}%)")
+    print(f"   PRECISION: {tp_total}/{tp_total+fp_total} ({tp_total/(tp_total+fp_total)*100:.1f}%)")
+    print(f"   F1 SCORE (Harmonic mean of recall and precision): {2*tp_total/(2*tp_total+fp_total+(total_expected-tp_total)):.2f}")
+
+    print("\n4. NOVA READ REUSE ANALYSIS:")
+    # Count reads that appear in multiple variants
+    reused_reads = sum(1 for read, variants in read_to_variants.items() if len(variants) > 1)
+    total_unique_nova_reads = len(read_to_variants)
+    
+    print(f"   Total unique nova reads: {total_unique_nova_reads}")
+    print(f"   Reads appearing in multiple variants: {reused_reads} ({reused_reads/total_unique_nova_reads*100:.1f}%)")
+    
+    # Distribution of read usage
+    usage_counts = Counter(len(variants) for variants in read_to_variants.values())
+    print("   Read usage distribution:")
+    for count, num_reads in sorted(usage_counts.items()):
+        print(f"     {count} variant(s): {num_reads} reads")
+    
+    print("\n5. DETECTION BY INSERTION TYPE:")
+    for ins_type in sorted(expected_counts.keys()):
+        expected = expected_counts[ins_type]
+        type_variants = type_detection.get(ins_type, [])
+        
+        # Count true positives for this type
+        tp_count = 0
+        for variant in type_variants:
+            if variant['support_reads'] == 1 and variant['nova_reads'] == 1:
+                nova_read = variant['nova_read_names'][0]
+                # Check if this variant is in our true positives
+                for tp_var in (categories['true_positives']['exclusive'] + 
+                             categories['true_positives']['shared']):
+                    if tp_var['index'] == variant['index']:
+                        tp_count += 1
+                        break
+        
+        detection_rate = (tp_count / expected * 100) if expected > 0 else 0
+        print(f"   {ins_type}: {tp_count}/{expected} ({detection_rate:.1f}%)")
+    
+    print("\n6. VARIANT CHARACTERISTICS:")
+    print("   By SV Type:")
+    for svtype, count in sorted(categories['summary']['by_svtype'].items()):
+        print(f"     {svtype}: {count}")
+    
+    print("   By Precision Flag:")
+    for precision, count in sorted(categories['summary']['by_precision'].items()):
+        print(f"     {precision}: {count}")
+    
+    # Size comparison analysis
+    if size_comparisons:
+        print("\n7. INSERTION SIZE ACCURACY:")
+        total_size_comparisons = len(size_comparisons)
+        exact_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'exact')
+        close_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'close')
+        reasonable_matches = sum(1 for c in size_comparisons if c['size_accuracy'] == 'reasonable')
+        
+        print(f"   Total size comparisons: {total_size_comparisons}")
+        print(f"   Exact matches (0bp diff): {exact_matches} ({exact_matches/total_size_comparisons*100:.1f}%)")
+        print(f"   Close matches (≤10bp diff): {close_matches} ({close_matches/total_size_comparisons*100:.1f}%)")
+        print(f"   Reasonable matches (≥80% ratio): {reasonable_matches} ({reasonable_matches/total_size_comparisons*100:.1f}%)")
+
 def generate_summary_report(nova_variants, categories, type_detection, insertions_data, alignment_comparisons=None, size_comparisons=None, fp_analysis=None):
     """Generate a comprehensive summary report."""
     print("\n" + "="*60)
@@ -701,6 +927,194 @@ def generate_summary_report(nova_variants, categories, type_detection, insertion
         print(f"   With genomic clustering: {fp_summary['with_genomic_clustering']} ({fp_summary['clustering_rate']:.1f}%)")
         print(f"   With identical sequences: {fp_summary['with_identical_sequences']} ({fp_summary['identical_sequence_rate']:.1f}%)")
 
+def save_detailed_tabular_data(categories, type_detection, size_comparisons, output_file, read_to_variants):
+    """Save detailed variant data in tabular format for advanced visualizations."""
+    
+    variant_records = []
+    
+    # Process true positives - exclusive
+    for variant in categories['true_positives']['exclusive']:
+        base_record = {
+            'variant_index': variant['index'],
+            'chrom': variant['CHROM'],
+            'pos': variant['POS'],
+            'svtype': variant['SVTYPE'],
+            'svlen': variant['SVLEN'],
+            'precise': variant['PRECISE'],
+            'support_reads': variant['support_reads'],
+            'nova_reads': variant['nova_reads'],
+            'variant_category': 'true_positive_exclusive',
+            'mapping_status': variant['mapping_status'],
+            'nova_read_reused': False,
+            'nova_read_usage_count': 1,
+            'reused_in_variants': []
+        }
+        
+        # Add size comparison if available
+        nova_read_name = variant['nova_read_names'][0]
+        size_comp = next((c for c in size_comparisons if c['read_name'] == nova_read_name), None) if size_comparisons else None
+        
+        if size_comp:
+            base_record.update({
+                'nova_read_name': nova_read_name,
+                'insertion_type': size_comp['insertion_type'],
+                'generated_size': size_comp['generated_size'],
+                'size_difference': size_comp['size_diff'],
+                'size_ratio': size_comp['size_ratio'],
+                'size_accuracy': size_comp['size_accuracy']
+            })
+        else:
+            base_record.update({
+                'nova_read_name': nova_read_name,
+                'insertion_type': None,
+                'generated_size': None,
+                'size_difference': None,
+                'size_ratio': None,
+                'size_accuracy': None
+            })
+        
+        variant_records.append(base_record)
+    
+    # Process true positives - shared
+    for variant in categories['true_positives']['shared']:
+        nova_read_name = variant['nova_read_names'][0]
+        other_variants = [v for v in variant['used_in_variants'] if v != variant['index']]
+        
+        base_record = {
+            'variant_index': variant['index'],
+            'chrom': variant['CHROM'],
+            'pos': variant['POS'],
+            'svtype': variant['SVTYPE'],
+            'svlen': variant['SVLEN'],
+            'precise': variant['PRECISE'],
+            'support_reads': variant['support_reads'],
+            'nova_reads': variant['nova_reads'],
+            'variant_category': 'true_positive_shared',
+            'mapping_status': variant['mapping_status'],
+            'nova_read_reused': True,
+            'nova_read_usage_count': variant['usage_count'],
+            'reused_in_variants': other_variants
+        }
+        
+        # Add size comparison if available
+        size_comp = next((c for c in size_comparisons if c['read_name'] == nova_read_name), None) if size_comparisons else None
+        
+        if size_comp:
+            base_record.update({
+                'nova_read_name': nova_read_name,
+                'insertion_type': size_comp['insertion_type'],
+                'generated_size': size_comp['generated_size'],
+                'size_difference': size_comp['size_diff'],
+                'size_ratio': size_comp['size_ratio'],
+                'size_accuracy': size_comp['size_accuracy']
+            })
+        else:
+            base_record.update({
+                'nova_read_name': nova_read_name,
+                'insertion_type': None,
+                'generated_size': None,
+                'size_difference': None,
+                'size_ratio': None,
+                'size_accuracy': None
+            })
+        
+        variant_records.append(base_record)
+    
+    # Process false positives - mapping errors
+    for variant in categories['false_positives']['mapping_error']:
+        nova_read_name = variant['nova_read_names'][0]
+        usage_count = len(read_to_variants.get(nova_read_name, [variant['index']]))
+        
+        base_record = {
+            'variant_index': variant['index'],
+            'chrom': variant['CHROM'],
+            'pos': variant['POS'],
+            'svtype': variant['SVTYPE'],
+            'svlen': variant['SVLEN'],
+            'precise': variant['PRECISE'],
+            'support_reads': variant['support_reads'],
+            'nova_reads': variant['nova_reads'],
+            'variant_category': 'false_positive_mapping',
+            'mapping_status': variant['mapping_status'],
+            'nova_read_reused': usage_count > 1,
+            'nova_read_usage_count': usage_count,
+            'reused_in_variants': read_to_variants.get(nova_read_name, [])
+        }
+        
+        # Add placeholder fields for consistency
+        base_record.update({
+            'nova_read_name': nova_read_name,
+            'insertion_type': None,
+            'generated_size': None,
+            'size_difference': None,
+            'size_ratio': None,
+            'size_accuracy': None
+        })
+        
+        variant_records.append(base_record)
+    
+    # Process false positives - multi-read
+    for variant in categories['false_positives']['multi_read']:
+        # For multi-read variants, create one record per nova read
+        if variant['nova_reads'] > 0:
+            for nova_read_name in variant['nova_read_names']:
+                usage_count = len(read_to_variants.get(nova_read_name, [variant['index']]))
+                
+                base_record = {
+                    'variant_index': variant['index'],
+                    'chrom': variant['CHROM'],
+                    'pos': variant['POS'],
+                    'svtype': variant['SVTYPE'],
+                    'svlen': variant['SVLEN'],
+                    'precise': variant['PRECISE'],
+                    'support_reads': variant['support_reads'],
+                    'nova_reads': variant['nova_reads'],
+                    'variant_category': 'false_positive_multi',
+                    'mapping_status': 'multi_read',
+                    'nova_read_reused': usage_count > 1,
+                    'nova_read_usage_count': usage_count,
+                    'reused_in_variants': read_to_variants.get(nova_read_name, []),
+                    'nova_fraction': variant['nova_fraction']
+                }
+                
+                # Add size comparison if available
+                size_comp = next((c for c in size_comparisons if c['read_name'] == nova_read_name), None) if size_comparisons else None
+                
+                if size_comp:
+                    base_record.update({
+                        'nova_read_name': nova_read_name,
+                        'insertion_type': size_comp['insertion_type'],
+                        'generated_size': size_comp['generated_size'],
+                        'size_difference': size_comp['size_diff'],
+                        'size_ratio': size_comp['size_ratio'],
+                        'size_accuracy': size_comp['size_accuracy']
+                    })
+                else:
+                    base_record.update({
+                        'nova_read_name': nova_read_name,
+                        'insertion_type': None,
+                        'generated_size': None,
+                        'size_difference': None,
+                        'size_ratio': None,
+                        'size_accuracy': None
+                    })
+                
+                variant_records.append(base_record)
+    
+    # Convert to DataFrame and save
+    df = pd.DataFrame(variant_records)
+    
+    # Convert lists to strings for CSV compatibility
+    df['reused_in_variants'] = df['reused_in_variants'].apply(lambda x: ','.join(map(str, x)) if x else '')
+    
+    # Save as CSV
+    df.to_csv(output_file, index=False)
+    
+    print(f"CSV data saved to: {output_file}")
+    print(f"Shape: {df.shape[0]} rows × {df.shape[1]} columns")
+    
+    return df
+
 def save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, fp_analysis, output_file, mapping_verification):
     """Save variant data in tabular format for advanced visualizations."""
     
@@ -826,6 +1240,71 @@ def save_tabular_data(nova_variants, categories, type_detection, alignment_compa
     
     return df
 
+def generate_detailed_summary_json(categories, expected_counts, read_to_variants, output_file):
+    """Generate a JSON summary using detailed categorization."""
+    
+    total_expected = sum(expected_counts.values())
+    tp_total = categories['true_positives']['total']
+    fp_total = categories['false_positives']['total']
+    
+    # Nova read reuse statistics
+    reused_reads = sum(1 for read, variants in read_to_variants.items() if len(variants) > 1)
+    total_unique_nova_reads = len(read_to_variants)
+    
+    # Usage distribution
+    usage_counts = Counter(len(variants) for variants in read_to_variants.values())
+    
+    summary = {
+        'analysis_timestamp': pd.Timestamp.now().isoformat(),
+        'overall_metrics': {
+            'total_variants_detected': categories['summary']['total_variants'],
+            'total_expected': total_expected,
+            'total_unique_nova_reads': total_unique_nova_reads,
+            'reads_appearing_in_multiple_variants': reused_reads,
+            'read_reuse_rate': (reused_reads / total_unique_nova_reads * 100) if total_unique_nova_reads > 0 else 0
+        },
+        'true_positives': {
+            'total': tp_total,
+            'exclusive': len(categories['true_positives']['exclusive']),
+            'shared': len(categories['true_positives']['shared']),
+            'detection_rate': (tp_total / total_expected * 100) if total_expected > 0 else 0
+        },
+        'false_positives': {
+            'total': fp_total,
+            'mapping_errors': len(categories['false_positives']['mapping_error']),
+            'multi_read_variants': len(categories['false_positives']['multi_read'])
+        },
+        'variant_characteristics': {
+            'by_svtype': dict(categories['summary']['by_svtype']),
+            'by_precision': dict(categories['summary']['by_precision'])
+        },
+        'read_usage_distribution': dict(usage_counts),
+        'detection_by_insertion_type': {}
+    }
+    
+    # Add per-type detection rates if we have the data
+    if expected_counts:
+        for ins_type, expected in expected_counts.items():
+            # Count true positives for this type
+            tp_count = 0
+            for variant in (categories['true_positives']['exclusive'] + 
+                          categories['true_positives']['shared']):
+                # We'd need insertion type info added to variants for this
+                # For now, just use placeholder
+                pass
+            
+            summary['detection_by_insertion_type'][ins_type] = {
+                'expected': expected,
+                'true_positives': tp_count,
+                'detection_rate': (tp_count / expected * 100) if expected > 0 else 0
+            }
+    
+    with open(output_file, 'w') as f:
+        json.dump(summary, f, indent=2)
+    
+    print(f"Summary JSON saved to: {output_file}")
+    return summary
+
 def generate_summary_json(df, expected_counts, fp_analysis, output_file):
     """Generate a lightweight JSON summary from CSV data."""
     total_variants = len(df)
@@ -897,7 +1376,6 @@ def main():
     
     simulation_jl = output_dir / f"{args.output_prefix}_simulation.jl"
     insertions_json = output_dir / f"{args.output_prefix}_insertions.json"
-    output_json = output_dir / f"{args.output_prefix}_variant_analysis.json"
     original_bam = args.original_bam
     modified_bam = output_dir / f"{args.output_prefix}_modified_reads.bam"
     
@@ -926,40 +1404,41 @@ def main():
     print("Verifying mapping locations...")
     mapping_verification = verify_mapping_locations(nova_variants, str(insertions_json), str(modified_bam))
     
-    print("Categorizing variants...")
-    categories = categorize_variants(nova_variants, mapping_verification)
-    
     print("Analyzing insertion types...")
     type_detection = analyze_insertion_types(nova_variants, insertions_json)
     
-    # Create insertion lookup for false positive analysis and alignment comparisons
+    # Create insertion lookup
     print("Creating insertion lookup...")
     with open(insertions_json, 'r') as f:
         insertions_data = json.load(f)
     read_to_insertion = create_insertion_lookup(insertions_data)
     
-    print("Analyzing false positives...")
-    fp_analysis = analyze_false_positives(nova_variants, read_to_insertion)
-    
-    print("Generating alignment comparison data...")
-    alignment_comparisons = get_alignment_comparisons(nova_variants, mapping_verification, read_to_insertion)
-    
     print("Comparing insertion sizes...")
     size_comparisons = compare_insertion_sizes(nova_variants, insertions_json)
     
+    # Track nova read usage
+    print("Tracking nova read usage across variants...")
+    read_to_variants = track_nova_read_usage(nova_variants)
+    
+    # Perform categorization
+    print("Categorizing variants...")
+    categories = categorize_variants_detailed(nova_variants, mapping_verification, read_to_variants)
+    
     # Generate reports
-    generate_summary_report(nova_variants, categories, type_detection, insertions_data, alignment_comparisons, size_comparisons, fp_analysis)
+    generate_detailed_summary_report(nova_variants, categories, type_detection, 
+                                  insertions_data, read_to_variants, size_comparisons)
     
-    # Save tabular data (primary output)
-    print("Generating tabular data...")
+    # Save tabular data
+    print("\nGenerating tabular data...")
     csv_file = output_dir / f"{args.output_prefix}_analysis.csv"
-    tabular_df = save_tabular_data(nova_variants, categories, type_detection, alignment_comparisons, size_comparisons, fp_analysis, str(csv_file), mapping_verification)
+    tabular_df = save_detailed_tabular_data(categories, type_detection, size_comparisons, 
+                                         str(csv_file), read_to_variants)
     
-    # Generate lightweight summary JSON from CSV data
+    # Generate summary JSON
     print("Generating summary JSON...")
     expected_counts = calculate_expected_counts(insertions_data)
     summary_json = output_dir / f"{args.output_prefix}_analysis_summary.json"
-    generate_summary_json(tabular_df, expected_counts, fp_analysis, str(summary_json))
+    generate_detailed_summary_json(categories, expected_counts, read_to_variants, str(summary_json))
 
 if __name__ == "__main__":
     main()
