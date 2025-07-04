@@ -8,7 +8,7 @@ from typing import List, Dict, Optional, Tuple
 import logging
 from dataclasses import dataclass
 
-from .region_utils import RegionFilter
+from .region_utils import RegionFilter, RegionAwareWindowGenerator
 
 
 @dataclass
@@ -67,7 +67,7 @@ class ReadSelector:
     
     def __init__(self, bam_path: str, min_mapq: int = 20, max_soft_clip_ratio: float = 0.1,
                  min_read_length: int = 10000, max_read_length: int = 20000, 
-                 max_reads_per_window: int = 1, target_regions: Optional[RegionFilter] = None,
+                 reads_per_window: int = 1, target_regions: Optional[RegionFilter] = None,
                  exclusion_regions: Optional[RegionFilter] = None):
         """
         Initialize ReadSelector.
@@ -78,7 +78,7 @@ class ReadSelector:
             max_soft_clip_ratio: Maximum soft clipping ratio
             min_read_length: Minimum read length
             max_read_length: Maximum read length
-            max_reads_per_window: Maximum reads per genomic window (default: 1 for de novo simulation)
+            reads_per_window: Number of reads per genomic window (default: 1 for de novo simulation)
             target_regions: Optional RegionFilter for inclusion filtering (only select reads overlapping these regions)
             exclusion_regions: Optional RegionFilter for exclusion filtering (avoid reads overlapping these regions)
         """
@@ -87,7 +87,7 @@ class ReadSelector:
         self.max_soft_clip_ratio = max_soft_clip_ratio
         self.min_read_length = min_read_length
         self.max_read_length = max_read_length
-        self.max_reads_per_window = max_reads_per_window
+        self.reads_per_window = reads_per_window
         self.target_regions = target_regions
         self.exclusion_regions = exclusion_regions
         self.logger = logging.getLogger(__name__)
@@ -136,40 +136,11 @@ class ReadSelector:
         
         return total_soft_clipped / read.query_length if read.query_length > 0 else 0.0
     
-    def _passes_region_filters(self, read: pysam.AlignedSegment) -> bool:
-        """
-        Check if read passes region filtering criteria.
-        
-        Args:
-            read: Aligned read segment
-            
-        Returns:
-            True if read passes region filters (or no region filters are set)
-        """
-        # Get read coordinates
-        read_chr = read.reference_name
-        read_start = read.reference_start
-        read_end = read.reference_end
-        
-        # Skip reads with invalid coordinates
-        if read_chr is None or read_start is None or read_end is None:
-            return False
-        
-        # Apply exclusion filters first (these take precedence)
-        if self.exclusion_regions:
-            if self.exclusion_regions.overlaps_read(read_chr, read_start, read_end):
-                return False
-        
-        # Apply target region filters if specified
-        if self.target_regions:
-            if not self.target_regions.overlaps_read(read_chr, read_start, read_end):
-                return False
-        
-        return True
-    
     def _passes_filters(self, read: pysam.AlignedSegment) -> bool:
         """
-        Check if read passes all filtering criteria (primary alignment, mapq, read length, soft clipping, regions)
+        Check if read passes basic filtering criteria (primary alignment, mapq, read length, soft clipping).
+        
+        Note: Region filtering is now handled by pre-computed windows, not per-read checks.
         """
         if read.is_secondary or read.is_supplementary or read.is_unmapped:
             return False
@@ -184,92 +155,14 @@ class ReadSelector:
         if soft_clip_ratio > self.max_soft_clip_ratio:
             return False
         
-        # Apply region filtering
-        if not self._passes_region_filters(read):
-            return False
-        
         return True
     
-    def _get_chromosome_sampling_regions(self, bam: pysam.AlignmentFile, 
-                                       window_size: int = 1000000) -> List[Tuple[str, int, int]]:
-        """
-        Get random sampling regions across all chromosomes proportional to their lengths.
-        
-        Args:
-            bam: Open BAM file handle
-            window_size: Size of sampling windows
-            
-        Returns:
-            List of tuples (chromosome, start, end) for random sampling
-        """
-        regions = []
-        
-        index_stats = bam.get_index_statistics()
-        
-        for stat in index_stats:
-            chrom = stat.contig
-            chrom_length = bam.get_reference_length(chrom)
-            
-            if chrom_length is None:
-                continue
-                
-            num_windows = max(1, chrom_length // window_size)
-            
-            for i in range(num_windows):
-                start = random.randint(0, max(0, chrom_length - window_size))
-                end = min(start + window_size, chrom_length)
-                regions.append((chrom, start, end))
-        
-        return regions
-
-    def _get_chromosome_proportional_targets(self, bam: pysam.AlignmentFile, n_reads: int) -> Dict[str, int]:
-        """
-        Calculate target number of reads per chromosome proportional to chromosome length.
-        
-        Args:
-            bam: Open BAM file handle
-            n_reads: Total number of reads to select
-            
-        Returns:
-            Dictionary mapping chromosome names to target read counts
-        """
-        index_stats = bam.get_index_statistics()
-        
-        # Calculate total genome length
-        total_length = 0
-        chrom_lengths = {}
-        
-        for stat in index_stats:
-            chrom = stat.contig
-            chrom_length = bam.get_reference_length(chrom)
-            if chrom_length is not None:
-                chrom_lengths[chrom] = chrom_length
-                total_length += chrom_length
-        
-        # Allocate reads proportionally
-        targets = {}
-        allocated = 0
-        
-        for chrom, length in chrom_lengths.items():
-            target = int((length / total_length) * n_reads)
-            targets[chrom] = target
-            allocated += target
-        
-        # Distribute remaining reads to largest chromosomes
-        remaining = n_reads - allocated
-        largest_chroms = sorted(chrom_lengths.keys(), key=lambda x: chrom_lengths[x], reverse=True)
-        
-        for i in range(remaining):
-            if i < len(largest_chroms):
-                targets[largest_chroms[i]] += 1
-        
-        return {k: v for k, v in targets.items() if v > 0}
-
     def _lazy_select(self, bam: pysam.AlignmentFile, n_reads: int) -> List[LazyReadReference]:
         """
-        Read selection method returning lazy references.
-        This method proportionally allocates target variant counts according to chromosome length,
-        then creates random windows across the chromosomes from which to sample reads.
+        Read selection method using region-aware window generation.
+        
+        Pre-generates windows that respect inclusion/exclusion regions, then samples
+        reads from these valid windows, eliminating per-read region checks.
         
         Args:
             bam: Open BAM file handle
@@ -278,90 +171,81 @@ class ReadSelector:
         Returns:
             List of LazyReadReference objects
         """
+        # Initialize region-aware window generator
+        window_generator = RegionAwareWindowGenerator(self.bam_path)
+        
+        # Get valid regions based on filters (cached operation)
+        valid_regions = window_generator.get_valid_regions(
+            self.target_regions,
+            self.exclusion_regions
+        )
+        
+        # Calculate required number of windows
+        n_windows = window_generator.calculate_required_windows(n_reads, self.reads_per_window)
+        
+        # Generate windows from valid regions
+        window_size = 1000000  # 1MB windows
+        windows = window_generator.generate_windows_for_regions(
+            valid_regions,
+            n_windows,
+            window_size,
+            seed=random.getstate()[1][0] if hasattr(random.getstate()[1], '__getitem__') else None
+        )
+        
+        if not windows:
+            self.logger.error("No valid windows could be generated from the specified regions")
+            return []
+        
+        if len(windows) < n_windows:
+            self.logger.warning(f"Could only generate {len(windows)} windows, "
+                              f"but {n_windows} were requested for {n_reads} reads")
+        
+        # Sample reads from windows
         selected_reads = []
+        windows_used = 0
         
-        # Use proportional allocation across chromosomes
-        chromosome_targets = self._get_chromosome_proportional_targets(bam, n_reads)
-        
-        self.logger.info(f"Using unified sampling for {n_reads} reads across {len(chromosome_targets)} chromosomes "
-                        f"(max {self.max_reads_per_window} reads per window)")
-        
-        for chrom, target_reads in chromosome_targets.items():
-            if target_reads == 0:
+        # Process windows in order (already shuffled by generator)
+        for chrom, start, end in windows:
+            if len(selected_reads) >= n_reads:
+                break
+                
+            try:
+                window_reads = []
+                for read in bam.fetch(chrom, start, end):
+                    # Only check basic filters, no region checking needed
+                    if not self._passes_filters(read):
+                        continue
+                    
+                    lazy_ref = LazyReadReference(
+                        bam_path=self.bam_path,
+                        read_name=read.query_name,
+                        original_chr=read.reference_name,
+                        original_pos=read.reference_start,
+                        read_length=read.query_length,
+                        mapq=read.mapping_quality,
+                        gc_content=self._calculate_gc_content(read.query_sequence),
+                        soft_clip_ratio=self._calculate_soft_clip_ratio(read)
+                    )
+                    
+                    window_reads.append(lazy_ref)
+                    
+                    # Stop if we have enough reads from this window
+                    if len(window_reads) >= self.reads_per_window:
+                        break
+                
+                # Add reads from this window
+                if window_reads:
+                    selected_reads.extend(window_reads[:self.reads_per_window])
+                    windows_used += 1
+                
+            except Exception as e:
+                self.logger.warning(f"Error fetching reads from {chrom}:{start}-{end}: {e}")
                 continue
-                
-            # Get chromosome length for window creation
-            chrom_length = bam.get_reference_length(chrom)
-            if chrom_length is None:
-                continue
-            
-            # Create sampling windows
-            window_size = 1000000  # 1MB windows
-            num_windows_needed = max(1, (target_reads + self.max_reads_per_window - 1) // self.max_reads_per_window)
-            total_possible_windows = max(1, chrom_length // window_size)
-            
-            # Create more windows than we need for better randomization
-            num_windows_to_create = min(total_possible_windows, num_windows_needed * 3)
-            
-            # Generate random windows for this chromosome
-            chrom_windows = []
-            for _ in range(num_windows_to_create):
-                start = random.randint(0, max(0, chrom_length - window_size))
-                end = min(start + window_size, chrom_length)
-                chrom_windows.append((chrom, start, end))
-            
-            # Shuffle windows for random sampling
-            random.shuffle(chrom_windows)
-            
-            # Collect reads from this chromosome
-            chrom_reads = []
-            windows_tried = 0
-            max_windows_to_try = len(chrom_windows) * 2
-            
-            window_idx = 0
-            while len(chrom_reads) < target_reads and windows_tried < max_windows_to_try:
-                if window_idx >= len(chrom_windows):
-                    # Reshuffle and restart if we've tried all windows
-                    random.shuffle(chrom_windows)
-                    window_idx = 0
-                
-                _, start, end = chrom_windows[window_idx]
-                windows_tried += 1
-                window_idx += 1
-                
-                try:
-                    window_reads = 0
-                    for read in bam.fetch(chrom, start, end):
-                        # Stop if we've reached chromosome target or window limit
-                        if len(chrom_reads) >= target_reads or window_reads >= self.max_reads_per_window:
-                            break
-                        
-                        if not self._passes_filters(read):
-                            continue
-                        
-                        lazy_ref = LazyReadReference(
-                            bam_path=self.bam_path,
-                            read_name=read.query_name,
-                            original_chr=read.reference_name,
-                            original_pos=read.reference_start,
-                            read_length=read.query_length,
-                            mapq=read.mapping_quality,
-                            gc_content=self._calculate_gc_content(read.query_sequence),
-                            soft_clip_ratio=self._calculate_soft_clip_ratio(read)
-                        )
-                        
-                        chrom_reads.append(lazy_ref)
-                        window_reads += 1
-                        
-                except Exception as e:
-                    self.logger.warning(f"Skipping region {chrom}:{start}-{end} due to error: {e}")
-                    continue
-            
-            selected_reads.extend(chrom_reads)
-            self.logger.debug(f"Selected {len(chrom_reads)} reads from {chrom} (target: {target_reads})")
         
-        self.logger.info(f"Unified sampling completed: {len(selected_reads)} reads selected")
-        return selected_reads
+        self.logger.info(f"Region-aware sampling completed: {len(selected_reads)} reads selected "
+                        f"from {windows_used} windows")
+        
+        return selected_reads[:n_reads]  # Ensure we don't return more than requested
     
     def select_reads(self, n_reads: int, use_legacy_methods: bool = False) -> List[LazyReadReference]:
         """

@@ -18,6 +18,7 @@ rule all:
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_modified_reads.fasta",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_registry.json",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_statistics.json",
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.vcf.gz",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.jl",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary.json",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis.csv",
@@ -53,7 +54,7 @@ rule simulate_variant_reads:
         min_length=config["min_read_length"],
         max_length=config["max_read_length"],
         min_distance_from_ends=config["min_distance_from_ends"],
-        max_reads_per_window=config["max_reads_per_window"]
+        reads_per_window=config["reads_per_window"]
     conda:
         "nova"
     shell:
@@ -66,7 +67,7 @@ rule simulate_variant_reads:
         --min-read-length {params.min_length} \
         --max-read-length {params.max_length} \
         --min-distance-from-ends {params.min_distance_from_ends} \
-        --max-reads-per-window {params.max_reads_per_window} \
+        --reads-per-window {params.reads_per_window} \
         -p {params.prefix} \
         -o {params.outdir}
         """

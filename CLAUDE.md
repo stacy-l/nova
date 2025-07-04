@@ -21,15 +21,6 @@ nova simulate input.bam config.json -o output/
 nova validate-config config.json
 ```
 
-→ **Setup instructions**: [claude_docs/development_setup.md](claude_docs/development_setup.md)
-
-## Key Parameters
-
-- **`--max-reads-per-window=1`** (REQUIRED): Prevents genomic clustering and false positives
-- **`--min-mapq=20`**: Quality threshold for read selection
-- **`--min-read-length=10000`**: Minimum read length filter
-- **`--max-soft-clip-ratio=0.1`**: Maximum allowed soft clipping
-
 ## General Guidelines
 
 - Think critically
@@ -43,12 +34,6 @@ nova validate-config config.json
 ### Core Documentation
 - **Project Overview**: [claude_docs/project_overview.md](claude_docs/project_overview.md)
 - **Architecture Guide**: [claude_docs/architecture.md](claude_docs/architecture.md)
-- **Development Setup**: [claude_docs/development_setup.md](claude_docs/development_setup.md)
-
-### Research & Results
-- **Window Limit Experiments**: [claude_docs/window_limit_experiments.md](claude_docs/window_limit_experiments.md)
-- **Memory Optimization**: [claude_docs/memory_optimization_report.md](claude_docs/memory_optimization_report.md)
-- **Mutation System**: [claude_docs/mutation_system_implementation.md](claude_docs/mutation_system_implementation.md)
 
 ### Development Guides
 - **Testing Philosophy**: [claude_docs/testing_philosophy.md](claude_docs/testing_philosophy.md)
@@ -80,13 +65,6 @@ nova validate-config config.json
 - ❌ Don't create docs for: minor fixes, temporary notes, code comments
 - 📝 Always update CLAUDE.md when: adding new docs, changing key params
 
-## Environment Notes
-
-**Important**: If `which python` doesn't show the nova conda environment path, prompt the user to exit and run `conda activate nova` before proceeding.
-
 ## Known Issues
-
-**Snakemake output crashes Claude Code**: Running `snakemake` commands can cause BrokenPipeError crashes. To test Snakemake workflows:
-- Use `snakemake -n --quiet` for dry runs
-- Redirect output to files: `snakemake -n > output.txt 2>&1`
-- Check files directly instead of streaming output
+**Environment**: If `which python` doesn't show the nova conda environment path, prompt the user to exit and run `conda activate nova` before proceeding.
+**Snakemake output crashes Claude Code**: Running `snakemake` commands can cause BrokenPipeError crashes. Allow the user to test `snakemake` commands instead.

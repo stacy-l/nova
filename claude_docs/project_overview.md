@@ -53,27 +53,6 @@ Nova addresses these challenges by:
 - Mobile element insertion profiling
 - Repeat expansion detection
 
-## Project Status
-
-### Current Capabilities
-- ✅ Three insertion type categories
-- ✅ Window-based clustering prevention
-- ✅ Comprehensive output tracking
-- ✅ Snakemake pipeline integration
-- ✅ Analysis scripts for validation
-
-### Recent Improvements
-- Window limit parameter eliminates false positives
-- Memory optimization for large-scale simulations
-- Enhanced chromosome-proportional distribution
-- Detailed false positive categorization
-
-### Future Directions
-- Deletion and duplication support
-- Complex structural variant patterns
-- Multi-sample simulation
-- Integration with additional variant callers
-
 ## Related Documentation
 - [Architecture Details](architecture.md)
 - [Window Limit Experiments](window_limit_experiments.md)

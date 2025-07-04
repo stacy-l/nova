@@ -263,10 +263,3 @@ rule analyze_variants:
     shell:
         "python scripts/analyze_vcf_results.py ..."
 ```
-
-## Future Enhancements
-
-- Real-time analysis during simulation
-- Interactive visualization outputs
-- Machine learning for FP prediction
-- Multi-sample analysis support

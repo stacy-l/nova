@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 Analyze Sniffles2 VCF results to identify variants supported by nova simulated reads.
 
@@ -121,7 +121,15 @@ def categorize_variant(variant):
     }
 
 def categorize_variants(nova_variants, mapping_verification=None):
-    """Categorize variants by type, precision, and support."""
+    """Categorize variants by type, precision, and support.
+    
+    Args:
+        nova_variants: List of variants to categorize
+        mapping_verification: Optional dict mapping read names to verification status
+    
+    Returns:
+        Dict with categorization results
+    """
     categories = {
         'by_svtype': defaultdict(int),
         'by_precision': defaultdict(int),
@@ -130,8 +138,8 @@ def categorize_variants(nova_variants, mapping_verification=None):
         'single_read_calls': {'single_nova_only': 0, 'total_variants': len(nova_variants)}
     }
     
-    # If mapping verification is provided, add mapping-aware categories
-    if mapping_verification is not None:
+    # If mapping verification is available, add detailed single call tracking
+    if mapping_verification:
         categories['single_read_calls'].update({
             'single_nova_only_correct_mapping': 0,
             'single_nova_only_incorrect_mapping': 0,
@@ -151,11 +159,12 @@ def categorize_variants(nova_variants, mapping_verification=None):
         if cat['is_single_nova_only']:
             categories['single_read_calls']['single_nova_only'] += 1
             
-            # If mapping verification is available, categorize by mapping status
-            if mapping_verification is not None:
+            # Add mapping verification tracking if available
+            if mapping_verification and len(variant['nova_read_names']) == 1:
+                nova_read = variant['nova_read_names'][0]
+                mapping_status = mapping_verification.get(nova_read, 'unknown')
+                
                 categories['single_read_calls']['single_nova_only_total'] += 1
-                nova_read_name = variant['nova_read_names'][0]  # Single nova-only has exactly one read
-                mapping_status = mapping_verification.get(nova_read_name, 'unknown')
                 
                 if mapping_status == 'correct_mapping':
                     categories['single_read_calls']['single_nova_only_correct_mapping'] += 1
@@ -175,17 +184,8 @@ def analyze_insertion_types(nova_variants, insertions_file):
         
         print(f"Loaded {len(insertions)} insertion records")
         
-        # Create mapping from read name to insertion metadata
-        read_to_insertion = {}
-        for insertion in insertions:
-            read_name = insertion.get('modified_read_name', '')
-            if read_name:
-                read_to_insertion[read_name] = {
-                    'insertion_type': insertion.get('insertion_type', 'unknown'),
-                    'insertion_id': insertion.get('insertion_id', ''),
-                    'original_read_name': insertion.get('original_read_name', ''),
-                    'insertion_length': insertion.get('insertion_sequence', {}).get('length', 0)
-                }
+        # Use unified lookup creation
+        read_to_insertion = create_insertion_lookup(insertions)
         
         # Categorize variants by insertion type
         type_detection = defaultdict(list)
@@ -209,95 +209,39 @@ def analyze_insertion_types(nova_variants, insertions_file):
         print(f"Error analyzing insertion types: {e}")
         return defaultdict(list)
 
-def compare_alignment_positions(nova_variants, insertions_file, original_bam_file, modified_bam_file):
-    """Compare alignment positions between original and modified nova reads."""
-    try:
-        # Load insertion metadata to get original positions
-        with open(insertions_file, 'r') as f:
-            insertions = json.load(f)
-        
-        # Create mapping from modified read name to original position
-        read_to_original_pos = {}
-        for insertion in insertions:
-            modified_name = insertion.get('modified_read_name', '')
-            original_name = insertion.get('base_read_name', '')
-            original_chrom = insertion.get('original_chr', '')
-            original_pos = insertion.get('original_pos', 0)
-            
-            if modified_name:
-                read_to_original_pos[modified_name] = {
-                    'original_name': original_name,
-                    'chrom': original_chrom,
-                    'pos': original_pos
-                }
-        
-        print(f"Loaded original positions for {len(read_to_original_pos)} nova reads")
-        
-        # Read modified BAM to get new alignment positions
-        alignment_comparisons = []
-        
-        if not Path(modified_bam_file).exists():
-            print(f"Warning: Modified BAM file {modified_bam_file} not found")
-            return []
-        
-        with pysam.AlignmentFile(modified_bam_file, 'rb') as modified_bam:
-            for variant in nova_variants:
-                for nova_read_name in variant['nova_read_names']:
-                    if nova_read_name in read_to_original_pos:
-                        original_info = read_to_original_pos[nova_read_name]
-                        
-                        # Find the read in the modified BAM
-                        found_read = False
-                        for read in modified_bam.fetch():
-                            if read.query_name == nova_read_name:
-                                found_read = True
-                                
-                                # Compare positions (binary match/no-match)
-                                original_chrom = original_info['chrom']
-                                original_pos = original_info['pos']
-                                modified_chrom = read.reference_name
-                                modified_pos = read.reference_start
-                                
-                                position_match = (original_chrom == modified_chrom and 
-                                                abs(original_pos - modified_pos) <= 1000)  # Allow 1kb tolerance
-                                
-                                alignment_comparisons.append({
-                                    'variant_index': variant['index'],
-                                    'read_name': nova_read_name,
-                                    'original_chrom': original_chrom,
-                                    'original_pos': original_pos,
-                                    'modified_chrom': modified_chrom,
-                                    'modified_pos': modified_pos,
-                                    'position_match': position_match,
-                                    'position_diff': abs(original_pos - modified_pos) if original_chrom == modified_chrom else None
-                                })
-                                break
-                        
-                        if not found_read:
-                            alignment_comparisons.append({
-                                'variant_index': variant['index'],
-                                'read_name': nova_read_name,
-                                'original_chrom': original_info['chrom'],
-                                'original_pos': original_info['pos'],
-                                'modified_chrom': None,
-                                'modified_pos': None,
-                                'position_match': False,
-                                'position_diff': None
-                            })
-        
-        print(f"Compared alignment positions for {len(alignment_comparisons)} nova reads")
-        return alignment_comparisons
-        
-    except Exception as e:
-        print(f"Error comparing alignment positions: {e}")
-        return []
+def get_alignment_comparisons(nova_variants, mapping_verification, read_to_insertion):
+    """Convert mapping verification results to alignment comparison format for compatibility.
+    
+    This function bridges the gap between the new unified mapping verification
+    and the existing report generation that expects alignment comparison data.
+    """
+    alignment_comparisons = []
+    
+    for variant in nova_variants:
+        for nova_read_name in variant['nova_read_names']:
+            if nova_read_name in mapping_verification and nova_read_name in read_to_insertion:
+                original_info = read_to_insertion[nova_read_name]
+                mapping_status = mapping_verification[nova_read_name]
+                
+                # Convert mapping status to position match
+                position_match = mapping_status == 'correct_mapping'
+                
+                alignment_comparisons.append({
+                    'variant_index': variant['index'],
+                    'read_name': nova_read_name,
+                    'original_chrom': original_info['original_chr'],
+                    'original_pos': original_info['original_pos'],
+                    'modified_chrom': original_info['original_chr'] if position_match else None,
+                    'modified_pos': original_info['original_pos'] if position_match else None,
+                    'position_match': position_match,
+                    'position_diff': 0 if position_match else None
+                })
+    
+    return alignment_comparisons
 
 def verify_mapping_locations(nova_variants, insertions_file, modified_bam_file, position_tolerance=1000):
     """
     Verify that nova reads in variants map to the same locations as their original base reads.
-    
-    This is a streamlined version of compare_alignment_positions specifically designed for
-    categorizing true/false positives based on mapping accuracy.
     
     Args:
         nova_variants: List of variants containing nova reads
@@ -313,17 +257,16 @@ def verify_mapping_locations(nova_variants, insertions_file, modified_bam_file, 
         with open(insertions_file, 'r') as f:
             insertions = json.load(f)
         
-        # Create mapping from modified read name to original position
+        # Use unified lookup creation (without size info for efficiency)
+        read_to_insertion = create_insertion_lookup(insertions, include_size=False)
+        
+        # Extract just the position info we need
         read_to_original_pos = {}
-        for insertion in insertions:
-            modified_name = insertion.get('modified_read_name', '')
-            original_chrom = insertion.get('original_chr', '')
-            original_pos = insertion.get('original_pos', 0)
-            
-            if modified_name and original_chrom and original_pos > 0:
-                read_to_original_pos[modified_name] = {
-                    'chrom': original_chrom,
-                    'pos': original_pos
+        for read_name, info in read_to_insertion.items():
+            if info['original_chr'] and info['original_pos'] > 0:
+                read_to_original_pos[read_name] = {
+                    'chrom': info['original_chr'],
+                    'pos': info['original_pos']
                 }
         
         print(f"Loaded original positions for {len(read_to_original_pos)} nova reads")
@@ -397,20 +340,14 @@ def compare_insertion_sizes(nova_variants, insertions_file):
         with open(insertions_file, 'r') as f:
             insertions = json.load(f)
         
-        # Create mapping from modified read name to insertion size and type
-        read_to_insertion_size = {}
-        read_to_insertion_type = {}
-        for insertion in insertions:
-            modified_name = insertion.get('modified_read_name', '')
-            insertion_size = insertion.get('insertion_length', 0)
-            insertion_type = insertion.get('insertion_type', 'unknown')
-            
-            if modified_name:
-                if insertion_size > 0:
-                    read_to_insertion_size[modified_name] = insertion_size
-                read_to_insertion_type[modified_name] = insertion_type
+        # Use unified lookup creation with size info
+        read_to_insertion = create_insertion_lookup(insertions, include_size=True)
         
-        print(f"Loaded insertion sizes for {len(read_to_insertion_size)} nova reads")
+        # Filter to only reads with valid sizes
+        reads_with_sizes = {name: info for name, info in read_to_insertion.items() 
+                           if info.get('insertion_length', 0) > 0}
+        
+        print(f"Loaded insertion sizes for {len(reads_with_sizes)} nova reads")
         
         # Compare with variant SVLEN values
         size_comparisons = []
@@ -419,8 +356,9 @@ def compare_insertion_sizes(nova_variants, insertions_file):
             variant_svlen = abs(variant.get('SVLEN', 0))  # Use absolute value
             
             for nova_read_name in variant['nova_read_names']:
-                if nova_read_name in read_to_insertion_size:
-                    generated_size = read_to_insertion_size[nova_read_name]
+                if nova_read_name in reads_with_sizes:
+                    insertion_info = reads_with_sizes[nova_read_name]
+                    generated_size = insertion_info['insertion_length']
                     
                     # Calculate size accuracy
                     size_diff = abs(generated_size - variant_svlen)
@@ -443,7 +381,7 @@ def compare_insertion_sizes(nova_variants, insertions_file):
                         'size_diff': size_diff,
                         'size_ratio': size_ratio,
                         'size_accuracy': size_accuracy,
-                        'insertion_type': read_to_insertion_type.get(nova_read_name, 'unknown')
+                        'insertion_type': insertion_info['insertion_type']
                     })
         
         print(f"Compared insertion sizes for {len(size_comparisons)} nova reads")
@@ -453,21 +391,38 @@ def compare_insertion_sizes(nova_variants, insertions_file):
         print(f"Error comparing insertion sizes: {e}")
         return []
 
-def create_insertion_lookup(insertions_data):
-    """Create lookup dictionary for insertion metadata."""
+def create_insertion_lookup(insertions_data, include_size=True):
+    """Create lookup dictionary for insertion metadata.
+    
+    Args:
+        insertions_data: List of insertion records
+        include_size: Whether to include insertion size info (default: True)
+    
+    Returns:
+        Dict mapping modified read names to insertion metadata
+    """
     read_to_insertion = {}
     
     for insertion in insertions_data:
         read_name = insertion.get('modified_read_name', '')
         if read_name:
-            read_to_insertion[read_name] = {
+            metadata = {
                 'insertion_type': insertion.get('insertion_type', 'unknown'),
                 'insertion_id': insertion.get('insertion_id', ''),
-                'insertion_length': insertion.get('insertion_length', 0),
                 'original_chr': insertion.get('original_chr', ''),
                 'original_pos': insertion.get('original_pos', 0),
-                'base_read_name': insertion.get('base_read_name', '')
+                'base_read_name': insertion.get('base_read_name', ''),
+                'original_read_name': insertion.get('original_read_name', '')
             }
+            
+            if include_size:
+                # Handle both direct insertion_length and nested structure
+                insertion_length = insertion.get('insertion_length', 0)
+                if insertion_length == 0 and 'insertion_sequence' in insertion:
+                    insertion_length = insertion.get('insertion_sequence', {}).get('length', 0)
+                metadata['insertion_length'] = insertion_length
+            
+            read_to_insertion[read_name] = metadata
     
     return read_to_insertion
 
@@ -490,7 +445,19 @@ def analyze_false_positives(nova_variants, read_to_insertion):
     print(f"  False positives: {len(false_positives)}")
     
     if not false_positives:
-        return {'false_positives': [], 'patterns': {}, 'summary': {}}
+        # Return complete structure even with no false positives
+        return {
+            'false_positives': [],
+            'patterns': {},
+            'summary': {
+                'total_false_positives': 0,
+                'by_composition': {},
+                'with_genomic_clustering': 0,
+                'with_identical_sequences': 0,
+                'clustering_rate': 0.0,
+                'identical_sequence_rate': 0.0
+            }
+        }
     
     # Analyze patterns in false positives
     fp_patterns = {}
@@ -629,27 +596,39 @@ def generate_summary_report(nova_variants, categories, type_detection, insertion
     print("\n2. DETECTION QUALITY ANALYSIS:")
     total_variants = len(nova_variants)
     
-    # Mapping-aware analysis
+    # Check if mapping verification was performed
     single_calls = categories['single_read_calls']
-    correct_mapping = single_calls['single_nova_only_correct_mapping']
-    incorrect_mapping = single_calls['single_nova_only_incorrect_mapping']
-    unknown_mapping = single_calls['single_nova_only_unknown_mapping']
-    total_single_calls = single_calls['single_nova_only_total']
-    
-    true_positives = correct_mapping
-    mapping_errors = incorrect_mapping
-    unknown_mapping_status = unknown_mapping
-    false_positives = total_variants - total_single_calls
-    
-    true_positive_rate = (true_positives / total_expected * 100) if total_expected > 0 else 0
-    mapping_error_rate = (mapping_errors / total_single_calls * 100) if total_single_calls > 0 else 0
-    
-    print(f"   Total variants detected: {total_variants}")
-    print(f"   Single nova-only calls: {total_single_calls}")
-    print(f"     - Correct mapping (true positives): {correct_mapping} ({true_positive_rate:.1f}%)")
-    print(f"     - Incorrect mapping (mapping errors): {incorrect_mapping} ({mapping_error_rate:.1f}%)")
-    print(f"     - Unknown mapping status: {unknown_mapping}")
-    print(f"   False positives (multi-read/mixed): {false_positives}")
+    if 'single_nova_only_correct_mapping' in single_calls:
+        # Mapping-aware analysis
+        correct_mapping = single_calls['single_nova_only_correct_mapping']
+        incorrect_mapping = single_calls['single_nova_only_incorrect_mapping']
+        unknown_mapping = single_calls['single_nova_only_unknown_mapping']
+        total_single_calls = single_calls['single_nova_only_total']
+        
+        true_positives = correct_mapping
+        mapping_errors = incorrect_mapping
+        unknown_mapping_status = unknown_mapping
+        false_positives = total_variants - total_single_calls
+        
+        true_positive_rate = (true_positives / total_expected * 100) if total_expected > 0 else 0
+        mapping_error_rate = (mapping_errors / total_single_calls * 100) if total_single_calls > 0 else 0
+        
+        print(f"   Total variants detected: {total_variants}")
+        print(f"   Single nova-only calls: {total_single_calls}")
+        print(f"     - Correct mapping (true positives): {correct_mapping} ({true_positive_rate:.1f}%)")
+        print(f"     - Incorrect mapping (mapping errors): {incorrect_mapping} ({mapping_error_rate:.1f}%)")
+        print(f"     - Unknown mapping status: {unknown_mapping}")
+        print(f"   False positives (multi-read/mixed): {false_positives}")
+    else:
+        # Original analysis (mapping verification disabled or failed)
+        false_positives = total_variants - total_single_nova_calls
+        detection_quality = (total_single_nova_calls / total_variants * 100) if total_variants > 0 else 0
+        false_positive_rate = (false_positives / total_variants * 100) if total_variants > 0 else 0
+        
+        print(f"   Total variants detected: {total_variants}")
+        print(f"   True positives (single nova-only): {total_single_nova_calls} ({detection_quality:.1f}%)")
+        print(f"   False positives (multi-read/mixed): {false_positives} ({false_positive_rate:.1f}%)")
+        print("   Note: Mapping verification not performed - use refined analysis for better accuracy")
     
     print("\n3. READ COMPOSITION BREAKDOWN:")
     for comp_type, count in sorted(categories['by_composition'].items()):
@@ -792,7 +771,7 @@ def save_tabular_data(nova_variants, categories, type_detection, alignment_compa
                 'modified_pos': None
             })
         
-        # Add mapping verification (for single nova reads)
+        # Add mapping verification data if available (for single nova reads)
         if (mapping_verification is not None and 
             variant['support_reads'] == 1 and variant['nova_reads'] == 1):
             nova_read_name = variant['nova_read_names'][0]
@@ -866,10 +845,10 @@ def generate_summary_json(df, expected_counts, fp_analysis, output_file):
                 tp_count = len(type_df[type_df['is_single_nova_only'] == True])
                 expected = expected_counts[ins_type]
                 type_performance[ins_type] = {
-                    'true_positives': tp_count,
                     'expected': expected,
+                    'total_detected': len(type_df),
+                    'true_positives': tp_count,
                     'true_positive_rate': (tp_count / expected * 100) if expected > 0 else 0,
-                    'total_detected': len(type_df)
                 }
     
     # Overall metrics
@@ -953,7 +932,7 @@ def main():
     print("Analyzing insertion types...")
     type_detection = analyze_insertion_types(nova_variants, insertions_json)
     
-    # Create insertion lookup for false positive analysis
+    # Create insertion lookup for false positive analysis and alignment comparisons
     print("Creating insertion lookup...")
     with open(insertions_json, 'r') as f:
         insertions_data = json.load(f)
@@ -962,8 +941,8 @@ def main():
     print("Analyzing false positives...")
     fp_analysis = analyze_false_positives(nova_variants, read_to_insertion)
     
-    print("Comparing alignment positions...")
-    alignment_comparisons = compare_alignment_positions(nova_variants, insertions_json, original_bam, modified_bam)
+    print("Generating alignment comparison data...")
+    alignment_comparisons = get_alignment_comparisons(nova_variants, mapping_verification, read_to_insertion)
     
     print("Comparing insertion sizes...")
     size_comparisons = compare_insertion_sizes(nova_variants, insertions_json)

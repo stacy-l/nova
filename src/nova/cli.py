@@ -115,14 +115,14 @@ def cli(ctx, verbose):
               help='Minimum distance from read ends for insertion (default: 1000)')
 @click.option('--random-seed', type=int,
               help='Random seed for reproducibility')
-@click.option('--max-reads-per-window', default=1, type=int,
-              help='Maximum reads per genomic window (default: 1 for de novo simulation)')
+@click.option('--reads-per-window', default=1, type=int,
+              help='Number of reads per genomic window (default: 1 for de novo simulation)')
 @click.option('--disable-exclusion-regions', is_flag=True,
               help='Disable exclusion region filtering (overrides exclusion_regions from config)')
 @click.pass_context
 def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
              min_mapq, max_soft_clip_ratio, min_read_length, max_read_length,
-             min_distance_from_ends, random_seed, max_reads_per_window,
+             min_distance_from_ends, random_seed, reads_per_window,
              disable_exclusion_regions):
     """
     Simulate de novo insertions in reads.
@@ -179,7 +179,7 @@ def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
             # Create ReadSelector for this region group
             read_selector = ReadSelector(
                 bam_file, min_mapq, max_soft_clip_ratio,
-                min_read_length, max_read_length, max_reads_per_window,
+                min_read_length, max_read_length, reads_per_window,
                 target_regions=target_filter, exclusion_regions=exclusion_filter
             )
             
