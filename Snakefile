@@ -21,7 +21,8 @@ rule all:
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_base.vcf.gz",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_simulation.jl",
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary.json",
-        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis.csv",
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary.csv",
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary_compact.csv"
 
 rule archive_configs:
     input:
@@ -190,7 +191,8 @@ rule analyze_vcf_results:
         statistics=f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_statistics.json"
     output:
         f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary.json",
-        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis.csv"
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary.csv",
+        f"{OUTPUT_DIR}/{OUTPUT_PREFIX}_analysis_summary_compact.csv"
     conda:
         "nova"
     threads: 1

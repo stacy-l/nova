@@ -423,24 +423,27 @@ def generate_detailed_summary_report(df, nova_variants, categories, expected_ins
         print(f"     Used in {count} variants: {num_reads} reads")
     
     print("\n6. PERFORMANCE BY INSERTION TYPE:")
-    print("Recall = observed reads / expected reads")
-    print("Precision = observed TP reads / (observed TP reads + observed FP reads)")
     for ins_type in sorted(expected_ins_type_counts.keys()):
         expected_count = expected_ins_type_counts[ins_type]
         observed_variants = set(observed_vars_by_ins_type.get(ins_type, []))
 
-        observed_tp_exclusive_count = len(tp_exclusive_vars.intersection(observed_variants))
-        observed_tp_shared_count = len(tp_shared_vars.intersection(observed_variants))
-        observed_tp_total_count = observed_tp_exclusive_count + observed_tp_shared_count
+        if len(observed_variants) > 0:
+            observed_tp_exclusive_count = len(tp_exclusive_vars.intersection(observed_variants))
+            observed_tp_shared_count = len(tp_shared_vars.intersection(observed_variants))
+            observed_tp_total_count = observed_tp_exclusive_count + observed_tp_shared_count
 
-        observed_fp_mapping_count = len(fp_mapping_vars.intersection(observed_variants))
-        observed_fp_multi_majority_nova_count = len(fp_multi_majority_nova_vars.intersection(observed_variants))
-        observed_fp_multi_minority_nova_count = len(fp_multi_minority_nova_vars.intersection(observed_variants))
-        observed_fp_total_count = observed_fp_mapping_count + observed_fp_multi_majority_nova_count + observed_fp_multi_minority_nova_count
+            observed_fp_mapping_count = len(fp_mapping_vars.intersection(observed_variants))
+            observed_fp_multi_majority_nova_count = len(fp_multi_majority_nova_vars.intersection(observed_variants))
+            observed_fp_multi_minority_nova_count = len(fp_multi_minority_nova_vars.intersection(observed_variants))
+            observed_fp_total_count = observed_fp_mapping_count + observed_fp_multi_majority_nova_count + observed_fp_multi_minority_nova_count
 
-        print (f"   {ins_type}:")
-        print (f"      Read utilization (recall): {len(observed_variants)}/{expected_count} ({len(observed_variants)/expected_count*100:.1f}%)")
-        print (f"      Read utilization (precision): {observed_tp_total_count}/{observed_tp_total_count+observed_fp_total_count} ({observed_tp_total_count/(observed_tp_total_count+observed_fp_total_count)*100:.1f}%)")
+            print("Recall = observed reads / expected reads")
+            print("Precision = observed TP reads / (observed TP reads + observed FP reads)")
+            print (f"   {ins_type}:")
+            print (f"      Read utilization (recall): {len(observed_variants)}/{expected_count} ({len(observed_variants)/expected_count*100:.1f}%)")
+            print (f"      Read utilization (precision): {observed_tp_total_count}/{observed_tp_total_count+observed_fp_total_count} ({observed_tp_total_count/(observed_tp_total_count+observed_fp_total_count)*100:.1f}%)")
+        else:
+            continue
 
     print("\n7. VARIANT CHARACTERISTICS:")
     print("   By SVTYPE:")
@@ -455,6 +458,245 @@ def generate_detailed_summary_report(df, nova_variants, categories, expected_ins
     print("\n8. MAPPING VERIFICATION:")
     for read_name, status in mapping_report.items():
         print(f"   {read_name}: {status}")
+
+def generate_json_report(df, nova_variants, categories, expected_ins_type_counts, observed_vars_by_ins_type,
+                        false_negatives, read_to_variants, mapping_report) -> dict:
+    """Generate a JSON report matching the console output structure.
+    
+    Args:
+        df: VCF dataframe
+        nova_variants: List of variants containing nova reads
+        categories: Categorized variants (true/false positives)
+        expected_ins_type_counts: Expected counts by insertion type
+        observed_vars_by_ins_type: Observed variants by insertion type
+        false_negatives: False negative analysis results
+        read_to_variants: Mapping of reads to variants
+        mapping_report: Mapping verification results
+        
+    Returns:
+        Dictionary containing all report data in structured format
+    """
+    total_expected = sum(expected_ins_type_counts.values())
+    
+    # Extract category data
+    tp_exclusive_vars = set(categories['true_positives']['exclusive'])
+    tp_shared_vars = set(categories['true_positives']['shared'])
+    tp_total = categories['true_positives']['total']
+    
+    fp_mapping_vars = set(categories['false_positives']['mapping_error'])
+    fp_multi_majority_nova_vars = set(categories['false_positives']['multi_read_majority_nova'])
+    fp_multi_minority_nova_vars = set(categories['false_positives']['multi_read_minority_nova'])
+    fp_total = categories['false_positives']['total']
+    
+    fn_total = false_negatives['false_negatives']
+    fn_rate = false_negatives['false_negative_rate']
+    
+    # Calculate nova read reuse metrics
+    reused_reads = sum(1 for read, variants in read_to_variants.items() if len(variants) > 1)
+    total_unique_nova_reads = len(read_to_variants)
+    usage_counts = Counter(len(variants) for variants in read_to_variants.values())
+    
+    # Calculate variant characteristics
+    observed_svtypes, observed_precisions = _calculate_observed_var_metrics(nova_variants)
+    
+    # Build performance by insertion type
+    performance_by_type = {}
+    for ins_type in sorted(expected_ins_type_counts.keys()):
+        expected_count = expected_ins_type_counts[ins_type]
+        observed_variants = set(observed_vars_by_ins_type.get(ins_type, []))
+        
+        observed_tp_exclusive_count = len(tp_exclusive_vars.intersection(observed_variants))
+        observed_tp_shared_count = len(tp_shared_vars.intersection(observed_variants))
+        observed_tp_total_count = observed_tp_exclusive_count + observed_tp_shared_count
+        
+        observed_fp_mapping_count = len(fp_mapping_vars.intersection(observed_variants))
+        observed_fp_multi_majority_nova_count = len(fp_multi_majority_nova_vars.intersection(observed_variants))
+        observed_fp_multi_minority_nova_count = len(fp_multi_minority_nova_vars.intersection(observed_variants))
+        observed_fp_total_count = observed_fp_mapping_count + observed_fp_multi_majority_nova_count + observed_fp_multi_minority_nova_count
+        
+        performance_by_type[ins_type] = {
+            "expected": expected_count,
+            "observed": len(observed_variants),
+            "recall": round(len(observed_variants) / expected_count * 100, 2) if expected_count > 0 else 0,
+            "precision": round(observed_tp_total_count / (observed_tp_total_count + observed_fp_total_count) * 100, 2)
+                        if (observed_tp_total_count + observed_fp_total_count) > 0 else 0,
+            "true_positives": {
+                "exclusive": observed_tp_exclusive_count,
+                "shared": observed_tp_shared_count,
+                "total": observed_tp_total_count
+            },
+            "false_positives": {
+                "mapping_errors": observed_fp_mapping_count,
+                "multi_read_majority": observed_fp_multi_majority_nova_count,
+                "multi_read_minority": observed_fp_multi_minority_nova_count,
+                "total": observed_fp_total_count
+            }
+        }
+    
+    # Build complete report structure
+    report = {
+        "summary": {
+            "total_variants_in_vcf": len(df),
+            "expected_variants_with_nova": total_expected,
+            "total_variants_with_nova": len(nova_variants)
+        },
+        "true_positives": {
+            "exclusive": {
+                "count": len(tp_exclusive_vars)
+            },
+            "shared": {
+                "count": len(tp_shared_vars)
+            },
+            "total": tp_total
+        },
+        "false_positives": {
+            "mapping_errors": {
+                "count": len(fp_mapping_vars)
+            },
+            "multi_read_majority_nova": {
+                "count": len(fp_multi_majority_nova_vars)
+            },
+            "multi_read_minority_nova": {
+                "count": len(fp_multi_minority_nova_vars)
+            },
+            "total": fp_total
+        },
+        "false_negatives": {
+            "count": fn_total,
+            "rate_percent": fn_rate
+        },
+        "performance_metrics": {
+            "nova_variants_only": {
+                "recall": round(tp_total / (tp_total + fn_total) * 100, 2) if (tp_total + fn_total) > 0 else 0,
+                "recall_fraction": f"{tp_total}/{total_expected}",
+                "precision": round(tp_total / (tp_total + fp_total) * 100, 2) if (tp_total + fp_total) > 0 else 0,
+                "precision_fraction": f"{tp_total}/{tp_total + fp_total}",
+                "f1_score": round(2 * tp_total / (2 * tp_total + fp_total + fn_total), 2) if (2 * tp_total + fp_total + fn_total) > 0 else 0,
+                "false_positive_rate": round(fp_total / len(nova_variants) * 100, 2) if len(nova_variants) > 0 else 0
+            },
+            "all_vcf_variants": {
+                "precision": round((tp_total / len(df)) * 100, 2) if len(df) > 0 else 0,
+                "precision_fraction": f"{tp_total}/{len(df)}",
+                "false_positive_rate": round((len(df) - tp_total) / len(df) * 100, 2) if len(df) > 0 else 0
+            }
+        },
+        "nova_read_reuse": {
+            "total_unique_reads": total_unique_nova_reads,
+            "reads_in_multiple_variants": reused_reads,
+            "reuse_rate_percent": round(reused_reads / total_unique_nova_reads * 100, 2) if total_unique_nova_reads > 0 else 0,
+            "usage_distribution": {str(k): v for k, v in sorted(usage_counts.items())}
+        },
+        "performance_by_insertion_type": performance_by_type,
+        "variant_characteristics": {
+            "by_svtype": {svtype: len(vars) for svtype, vars in sorted(observed_svtypes.items())},
+            "by_precision": {str(precision): len(vars) for precision, vars in sorted(observed_precisions.items())}
+        },
+        "mapping_verification": mapping_report
+    }
+    
+    return report
+
+def generate_csv_report(json_report: dict, output_file: Path) -> None:
+    """Convert JSON report to a single pandas-readable CSV format.
+    
+    Creates a unified table with performance metrics by insertion type as the main structure,
+    with summary metrics included as additional columns.
+    
+    Args:
+        json_report: The JSON report dictionary
+        output_file: Path to write the CSV file
+    """
+    # Extract summary metrics once
+    summary = json_report['summary']
+    tp = json_report['true_positives']
+    fp = json_report['false_positives']
+    fn = json_report['false_negatives']
+    nova_metrics = json_report['performance_metrics']['nova_variants_only']
+    all_vcf_metrics = json_report['performance_metrics']['all_vcf_variants']
+    reuse_data = json_report['nova_read_reuse']
+    mapping = json_report['mapping_verification']
+    
+    # Build main dataframe from performance by insertion type
+    rows = []
+    for ins_type, metrics in json_report['performance_by_insertion_type'].items():
+        row = {
+            # Insertion type metrics
+            'insertion_type': ins_type,
+            'expected': metrics['expected'],
+            'observed': metrics['observed'],
+            'recall': metrics['recall'],
+            'precision': metrics['precision'],
+            'tp_exclusive': metrics['true_positives']['exclusive'],
+            'tp_shared': metrics['true_positives']['shared'],
+            'tp_total': metrics['true_positives']['total'],
+            'fp_mapping_errors': metrics['false_positives']['mapping_errors'],
+            'fp_multi_read_majority': metrics['false_positives']['multi_read_majority'],
+            'fp_multi_read_minority': metrics['false_positives']['multi_read_minority'],
+            'fp_total': metrics['false_positives']['total'],
+            
+            # Add summary metrics (same for all rows)
+            'total_variants_in_vcf': summary['total_variants_in_vcf'],
+            'expected_variants_with_nova': summary['expected_variants_with_nova'],
+            'total_variants_with_nova': summary['total_variants_with_nova'],
+            'overall_tp_exclusive': tp['exclusive']['count'],
+            'overall_tp_shared': tp['shared']['count'],
+            'overall_tp_total': tp['total'],
+            'overall_fp_mapping_errors': fp['mapping_errors']['count'],
+            'overall_fp_multi_majority': fp['multi_read_majority_nova']['count'],
+            'overall_fp_multi_minority': fp['multi_read_minority_nova']['count'],
+            'overall_fp_total': fp['total'],
+            'overall_fn': fn['count'],
+            'overall_fn_rate_percent': fn['rate_percent'],
+            'overall_recall': nova_metrics['recall'],
+            'overall_precision': nova_metrics['precision'],
+            'overall_f1_score': nova_metrics['f1_score'],
+            'overall_precision_all_vcf': all_vcf_metrics['precision'],
+            'total_unique_nova_reads': reuse_data['total_unique_reads'],
+            'reads_in_multiple_variants': reuse_data['reads_in_multiple_variants'],
+            'nova_read_reuse_rate_percent': reuse_data['reuse_rate_percent'],
+            'mapping_unknown': mapping.get('unknown_mapping', 0),
+            'mapping_unknown_original': mapping.get('unknown_original_mapping', 0),
+            'mapping_correct': mapping.get('correct_mapping', 0),
+            'mapping_incorrect': mapping.get('incorrect_mapping', 0)
+        }
+        rows.append(row)
+    
+    # Create dataframe and save
+    df = pd.DataFrame(rows)
+    df.to_csv(output_file, index=False)
+    
+    # Also create a separate summary CSV that's more compact
+    summary_file = output_file.parent / f"{output_file.stem}_compact.csv"
+    summary_rows = [{
+        'total_variants_in_vcf': summary['total_variants_in_vcf'],
+        'expected_variants_with_nova': summary['expected_variants_with_nova'],
+        'total_variants_with_nova': summary['total_variants_with_nova'],
+        'tp_exclusive': tp['exclusive']['count'],
+        'tp_shared': tp['shared']['count'],
+        'tp_total': tp['total'],
+        'fp_mapping_errors': fp['mapping_errors']['count'],
+        'fp_multi_majority': fp['multi_read_majority_nova']['count'],
+        'fp_multi_minority': fp['multi_read_minority_nova']['count'],
+        'fp_total': fp['total'],
+        'fn': fn['count'],
+        'fn_rate_percent': fn['rate_percent'],
+        'recall': nova_metrics['recall'],
+        'precision': nova_metrics['precision'],
+        'f1_score': nova_metrics['f1_score'],
+        'precision_all_vcf': all_vcf_metrics['precision'],
+        'total_unique_nova_reads': reuse_data['total_unique_reads'],
+        'reads_in_multiple_variants': reuse_data['reads_in_multiple_variants'],
+        'nova_read_reuse_rate_percent': reuse_data['reuse_rate_percent'],
+        'mapping_unknown': mapping.get('unknown_mapping', 0),
+        'mapping_unknown_original': mapping.get('unknown_original_mapping', 0),
+        'mapping_correct': mapping.get('correct_mapping', 0),
+        'mapping_incorrect': mapping.get('incorrect_mapping', 0),
+        'variant_svtype_counts': ', '.join([f"{k}:{v}" for k, v in json_report['variant_characteristics']['by_svtype'].items()]),
+        'variant_precision_counts': ', '.join([f"{k}:{v}" for k, v in json_report['variant_characteristics']['by_precision'].items()])
+    }]
+    
+    summary_df = pd.DataFrame(summary_rows)
+    summary_df.to_csv(summary_file, index=False)
 
 def main():
     """Main analysis function."""
@@ -533,7 +775,22 @@ def main():
     
     # Generate reports
     generate_detailed_summary_report(df, nova_variants, categories, expected_ins_type_counts, observed_vars_by_ins_type,
-                                  false_negatives, read_to_variants, mapping_report)
+                                      false_negatives, read_to_variants, mapping_report)
+
+    summary_json = output_dir / f"{args.output_prefix}_analysis_summary.json"
+    json_report = generate_json_report(df, nova_variants, categories, expected_ins_type_counts, 
+                                         observed_vars_by_ins_type, false_negatives, read_to_variants, mapping_report)
+    
+    with open(summary_json, 'w') as f:
+        json.dump(json_report, f, indent=2)
+        print(f"\nJSON report written to {summary_json}")
+    
+    # Generate CSV report
+    summary_csv = output_dir / f"{args.output_prefix}_analysis_summary.csv"
+    compact_csv = output_dir / f"{args.output_prefix}_analysis_summary_compact.csv"
+    generate_csv_report(json_report, summary_csv)
+    print(f"CSV report written to {summary_csv}")
+    print(f"Compact CSV report written to {compact_csv}")
 
 if __name__ == "__main__":
     main()
