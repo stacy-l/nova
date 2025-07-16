@@ -152,9 +152,9 @@ def categorize_variants(nova_variants, mapping_verification, read_to_variants) -
             nova_fraction = nova_reads / support_reads
             
             if nova_fraction > 0.5:
-                categories['false_positives']['multi_read_majority_nova'].append(nova_read_name)
+                categories['false_positives']['multi_read_majority_nova'].extend(nova_read_names)
             else:
-                categories['false_positives']['multi_read_minority_nova'].append(nova_read_name)
+                categories['false_positives']['multi_read_minority_nova'].extend(nova_read_names)
 
             categories['false_positives']['total'] += 1
     
