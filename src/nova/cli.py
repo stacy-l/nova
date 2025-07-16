@@ -99,6 +99,7 @@ def cli(ctx, verbose):
 @cli.command()
 @click.argument('bam_file', type=click.Path(exists=True))
 @click.argument('config_file', type=click.Path(exists=True))
+@click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
 @click.option('--output-dir', '-o', default='.', type=click.Path(),
               help='Output directory for results')
 @click.option('--output-prefix', '-p', default='nova_sim',
@@ -120,13 +121,18 @@ def cli(ctx, verbose):
 @click.option('--disable-exclusion-regions', is_flag=True,
               help='Disable exclusion region filtering (overrides exclusion_regions from config)')
 @click.pass_context
-def simulate(ctx, bam_file, config_file, output_dir, output_prefix,
+def simulate(ctx, bam_file, config_file, verbose, output_dir, output_prefix,
              min_mapq, max_soft_clip_ratio, min_read_length, max_read_length,
              min_distance_from_ends, random_seed, reads_per_window,
              disable_exclusion_regions):
     """
     Simulate de novo insertions in reads.
     """
+    # Handle verbose flag from either command-level or group-level
+    if verbose or ctx.obj.get('verbose', False):
+        setup_logging(True)
+        ctx.obj['verbose'] = True
+    
     logger = logging.getLogger(__name__)
 
     # Validate configuration before running - will exit if invalid
@@ -261,7 +267,7 @@ def validate_config(config_file):
 
 def main():
     display_ascii()
-    cli()
+    cli(obj={})
 
 if __name__ == '__main__':
     main()
