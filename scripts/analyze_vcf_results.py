@@ -70,6 +70,15 @@ def identify_nova_variants(df) -> List[Dict]:
         nova_reads = [r for r in rnames if 'nova' in str(r)]
         
         if nova_reads:
+            # Normalize FILTER field to handle both strings and lists
+            filter_raw = row.get('FILTER', row.get('filter', 'UNKNOWN'))
+            if isinstance(filter_raw, list):
+                filter_status = ';'.join(str(f) for f in filter_raw) if filter_raw else 'UNKNOWN'
+            elif filter_raw is None or filter_raw == '':
+                filter_status = 'UNKNOWN'
+            else:
+                filter_status = str(filter_raw)
+            
             # Use flexible column name lookup
             variant_info = {
                 'ID': row.get('ID', row.get('id', '')),
@@ -79,6 +88,7 @@ def identify_nova_variants(df) -> List[Dict]:
                 'SVLEN': row.get('SVLEN', row.get('svlen', 0)),
                 'PRECISE': row.get('PRECISE', row.get('precise', False)),
                 'SUPPORT': row.get('SUPPORT', row.get('support', 0)),
+                'FILTER': filter_status,
                 'support_reads': len(rnames), # backup for case where SUPPORT != len(rnames)
                 'nova_reads': len(nova_reads),
                 'nova_read_names': nova_reads,
@@ -113,20 +123,27 @@ def categorize_variants(nova_variants, mapping_verification, read_to_variants) -
         'true_positives': {
             'exclusive': [],      # Single nova, correct mapping, not used elsewhere
             'shared': [],         # Single nova, correct mapping, used elsewhere
-            'total': 0
+            'total': 0,
+            'by_filter': defaultdict(int)  # Track by FILTER status
         },
         'false_positives': {
             'mapping_error': [],  # Single nova, incorrect mapping
             'multi_read_majority_nova': [],     # Multiple reads (majority nova)
             'multi_read_minority_nova': [], # Multiple reads (minority nova)
-            'total': 0
-        }
+            'total': 0,
+            'by_filter': defaultdict(int)  # Track by FILTER status
+        },
+        'variant_filters': []  # Track FILTER for each variant
     }
     
     for variant in nova_variants:
         support_reads = variant['support_reads'] # count
         nova_reads = variant['nova_reads'] # count
         nova_read_names = variant['nova_read_names'] # list strs
+        filter_status = variant.get('FILTER', 'UNKNOWN')
+        
+        # Track filter for this variant
+        categories['variant_filters'].append(filter_status)
         
         if support_reads == 1 and nova_reads == 1:
             nova_read_name = nova_read_names[0]
@@ -142,10 +159,12 @@ def categorize_variants(nova_variants, mapping_verification, read_to_variants) -
                 else:
                     categories['true_positives']['exclusive'].append(nova_read_name)
                 categories['true_positives']['total'] += 1
+                categories['true_positives']['by_filter'][filter_status] += 1
                 
             else:
                 categories['false_positives']['mapping_error'].append(nova_read_name)
                 categories['false_positives']['total'] += 1
+                categories['false_positives']['by_filter'][filter_status] += 1
                 
         else:
             # Multi-read variant (false positive)
@@ -157,6 +176,7 @@ def categorize_variants(nova_variants, mapping_verification, read_to_variants) -
                 categories['false_positives']['multi_read_minority_nova'].extend(nova_read_names)
 
             categories['false_positives']['total'] += 1
+            categories['false_positives']['by_filter'][filter_status] += 1
     
     return categories
 
@@ -341,7 +361,8 @@ def analyze_false_negatives(all_inserted_nova_read_names, read_to_variants) -> D
     return {
         'false_negatives': len(missing_reads),
         'missing_read_names': sorted(list(missing_reads)),
-        'false_negative_rate': (len(missing_reads) / len(all_inserted_nova_read_names) * 100) if len(all_inserted_nova_read_names) > 0 else 0
+        'false_negative_rate': (len(missing_reads) / len(all_inserted_nova_read_names) * 100) if len(all_inserted_nova_read_names) > 0 else 0,
+        'filter_status': 'N/A'  # False negatives have no FILTER as they weren't called
     }
 
 def calculate_expected_ins_type_counts(insertions_data) -> Dict[str, int]:
@@ -366,6 +387,19 @@ def generate_detailed_summary_report(df, nova_variants, categories, expected_ins
     print(f"\nTotal variants in VCF: {len(df)}")
     print(f"Expected variants with nova reads: {total_expected}")
     print(f"Total variants with nova reads: {len(nova_variants)}")
+    
+    # Calculate and display all VCF filter breakdown
+    filter_col = 'FILTER' if 'FILTER' in df.columns else 'filter'
+    if filter_col in df.columns:
+        normalized_filters = df[filter_col].apply(normalize_filter_value)
+        all_vcf_filter_counts = normalized_filters.value_counts().to_dict()
+        
+        print("\nALL VCF VARIANTS BY FILTER:")
+        for filter_val, count in sorted(all_vcf_filter_counts.items()):
+            print(f"   {filter_val}: {count}")
+    else:
+        print("\nALL VCF VARIANTS BY FILTER:")
+        print(f"   UNKNOWN: {len(df)} (no FILTER column found)")
     
     print("\n1. TRUE POSITIVES (single nova with correct mapping):")
     tp_exclusive_vars = set(categories['true_positives']['exclusive'])
@@ -455,9 +489,37 @@ def generate_detailed_summary_report(df, nova_variants, categories, expected_ins
     for precision, vars in sorted(observed_precisions.items()):
         print(f"     {precision}: {len(vars)}")
 
-    print("\n8. MAPPING VERIFICATION:")
+    print("\n8. FILTER BREAKDOWN:")
+    filter_counts = Counter(categories['variant_filters'])
+    tp_by_filter = dict(categories['true_positives']['by_filter'])
+    fp_by_filter = dict(categories['false_positives']['by_filter'])
+    
+    print("   All nova variants by filter:")
+    for filter_val, count in sorted(filter_counts.items()):
+        print(f"     {filter_val}: {count}")
+    
+    print("   True positives by filter:")
+    for filter_val, count in sorted(tp_by_filter.items()):
+        print(f"     {filter_val}: {count}")
+    
+    print("   False positives by filter:")
+    for filter_val, count in sorted(fp_by_filter.items()):
+        print(f"     {filter_val}: {count}")
+    
+    print(f"   False negatives: {false_negatives['false_negatives']} (FILTER: N/A)")
+
+    print("\n9. MAPPING VERIFICATION:")
     for read_name, status in mapping_report.items():
         print(f"   {read_name}: {status}")
+
+def normalize_filter_value(filter_val):
+    """Normalize a single FILTER value to handle lists, None, etc."""
+    if isinstance(filter_val, list):
+        return ';'.join(str(f) for f in filter_val) if filter_val else 'UNKNOWN'
+    elif filter_val is None or filter_val == '':
+        return 'UNKNOWN'
+    else:
+        return str(filter_val)
 
 def generate_json_report(df, nova_variants, categories, expected_ins_type_counts, observed_vars_by_ins_type,
                         false_negatives, read_to_variants, mapping_report) -> dict:
@@ -499,6 +561,11 @@ def generate_json_report(df, nova_variants, categories, expected_ins_type_counts
     # Calculate variant characteristics
     observed_svtypes, observed_precisions = _calculate_observed_var_metrics(nova_variants)
     
+    # Calculate filter breakdowns
+    filter_counts = Counter(categories['variant_filters'])
+    tp_by_filter = dict(categories['true_positives']['by_filter'])
+    fp_by_filter = dict(categories['false_positives']['by_filter'])
+    
     # Build performance by insertion type
     performance_by_type = {}
     for ins_type in sorted(expected_ins_type_counts.keys()):
@@ -533,12 +600,23 @@ def generate_json_report(df, nova_variants, categories, expected_ins_type_counts
             }
         }
     
+    # Calculate filter breakdown for ALL VCF variants
+    filter_col = 'FILTER' if 'FILTER' in df.columns else 'filter'
+    if filter_col in df.columns:
+        normalized_filters = df[filter_col].apply(normalize_filter_value)
+        all_vcf_filter_counts = normalized_filters.value_counts().to_dict()
+    else:
+        all_vcf_filter_counts = {'UNKNOWN': len(df)}
+    
     # Build complete report structure
     report = {
         "summary": {
             "total_variants_in_vcf": len(df),
             "expected_variants_with_nova": total_expected,
-            "total_variants_with_nova": len(nova_variants)
+            "total_variants_with_nova": len(nova_variants),
+            "all_vcf_filters": {
+                "total_by_filter": all_vcf_filter_counts
+            }
         },
         "true_positives": {
             "exclusive": {
@@ -591,6 +669,17 @@ def generate_json_report(df, nova_variants, categories, expected_ins_type_counts
             "by_svtype": {svtype: len(vars) for svtype, vars in sorted(observed_svtypes.items())},
             "by_precision": {str(precision): len(vars) for precision, vars in sorted(observed_precisions.items())}
         },
+        "filter_breakdown": {
+            "total_by_filter": dict(filter_counts),
+            "pass_count": filter_counts.get('PASS', 0),
+            "aln_nm_count": filter_counts.get('ALN_NM', 0),
+            "true_positives_by_filter": tp_by_filter,
+            "false_positives_by_filter": fp_by_filter,
+            "false_negatives": {
+                "count": fn_total,
+                "filter_status": false_negatives.get('filter_status', 'N/A')
+            }
+        },
         "mapping_verification": mapping_report
     }
     
@@ -615,6 +704,8 @@ def generate_csv_report(json_report: dict, output_file: Path) -> None:
     all_vcf_metrics = json_report['performance_metrics']['all_vcf_variants']
     reuse_data = json_report['nova_read_reuse']
     mapping = json_report['mapping_verification']
+    filter_data = json_report.get('filter_breakdown', {})
+    all_vcf_filter_data = summary.get('all_vcf_filters', {})
     
     # Build main dataframe from performance by insertion type
     rows = []
@@ -657,7 +748,17 @@ def generate_csv_report(json_report: dict, output_file: Path) -> None:
             'mapping_unknown': mapping.get('unknown_mapping', 0),
             'mapping_unknown_original': mapping.get('unknown_original_mapping', 0),
             'mapping_correct': mapping.get('correct_mapping', 0),
-            'mapping_incorrect': mapping.get('incorrect_mapping', 0)
+            'mapping_incorrect': mapping.get('incorrect_mapping', 0),
+            # Add filter columns
+            'filter_pass_count': filter_data.get('pass_count', 0),
+            'filter_aln_nm_count': filter_data.get('aln_nm_count', 0),
+            'tp_pass': filter_data.get('true_positives_by_filter', {}).get('PASS', 0),
+            'tp_aln_nm': filter_data.get('true_positives_by_filter', {}).get('ALN_NM', 0),
+            'fp_pass': filter_data.get('false_positives_by_filter', {}).get('PASS', 0),
+            'fp_aln_nm': filter_data.get('false_positives_by_filter', {}).get('ALN_NM', 0),
+            # Add all-VCF filter columns
+            'all_vcf_filter_pass_count': all_vcf_filter_data.get('total_by_filter', {}).get('PASS', 0),
+            'all_vcf_filter_aln_nm_count': all_vcf_filter_data.get('total_by_filter', {}).get('ALN_NM', 0)
         }
         rows.append(row)
     
@@ -692,7 +793,19 @@ def generate_csv_report(json_report: dict, output_file: Path) -> None:
         'mapping_correct': mapping.get('correct_mapping', 0),
         'mapping_incorrect': mapping.get('incorrect_mapping', 0),
         'variant_svtype_counts': ', '.join([f"{k}:{v}" for k, v in json_report['variant_characteristics']['by_svtype'].items()]),
-        'variant_precision_counts': ', '.join([f"{k}:{v}" for k, v in json_report['variant_characteristics']['by_precision'].items()])
+        'variant_precision_counts': ', '.join([f"{k}:{v}" for k, v in json_report['variant_characteristics']['by_precision'].items()]),
+        # Add filter summary
+        'filter_pass_count': filter_data.get('pass_count', 0),
+        'filter_aln_nm_count': filter_data.get('aln_nm_count', 0),
+        'tp_pass': filter_data.get('true_positives_by_filter', {}).get('PASS', 0),
+        'tp_aln_nm': filter_data.get('true_positives_by_filter', {}).get('ALN_NM', 0),
+        'fp_pass': filter_data.get('false_positives_by_filter', {}).get('PASS', 0),
+        'fp_aln_nm': filter_data.get('false_positives_by_filter', {}).get('ALN_NM', 0),
+        'filter_all_counts': ', '.join([f"{k}:{v}" for k, v in filter_data.get('total_by_filter', {}).items()]),
+        # Add all-VCF filter summary
+        'all_vcf_filter_pass_count': all_vcf_filter_data.get('total_by_filter', {}).get('PASS', 0),
+        'all_vcf_filter_aln_nm_count': all_vcf_filter_data.get('total_by_filter', {}).get('ALN_NM', 0),
+        'all_vcf_filter_counts': ', '.join([f"{k}:{v}" for k, v in all_vcf_filter_data.get('total_by_filter', {}).items()])
     }]
     
     summary_df = pd.DataFrame(summary_rows)
