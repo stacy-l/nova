@@ -81,6 +81,7 @@ def identify_nova_variants(df) -> List[Dict]:
             
             # Use flexible column name lookup
             variant_info = {
+                'original_index': idx,  # Track original dataframe index
                 'ID': row.get('ID', row.get('id', '')),
                 'CHROM': row.get('CHROM', row.get('chrom', '')),
                 'POS': row.get('POS', row.get('start', 0)),
@@ -811,6 +812,47 @@ def generate_csv_report(json_report: dict, output_file: Path) -> None:
     summary_df = pd.DataFrame(summary_rows)
     summary_df.to_csv(summary_file, index=False)
 
+def export_nova_variants_csv(df, nova_variants, categories, output_file):
+    """Export all nova variants with identity classification to CSV.
+    
+    Args:
+        df: Original VCF dataframe
+        nova_variants: List of variants containing nova reads (with original_index)
+        categories: Categorization results from categorize_variants()
+        output_file: Path to write the nova variants CSV
+    """
+    # Extract all TP and FP nova read names from existing categorization
+    tp_reads = set(categories['true_positives']['exclusive'] + 
+                   categories['true_positives']['shared'])
+    
+    fp_reads = set(categories['false_positives']['mapping_error'] + 
+                   categories['false_positives']['multi_read_majority_nova'] + 
+                   categories['false_positives']['multi_read_minority_nova'])
+    
+    # Build list of nova variant indices and their identities
+    nova_indices = []
+    identities = []
+    
+    for variant in nova_variants:
+        nova_reads_list = variant['nova_read_names']
+        original_idx = variant['original_index']
+        
+        # Determine identity based on nova reads categorization
+        # If any nova read is TP, mark variant as TP; otherwise FP
+        has_tp_read = any(read in tp_reads for read in nova_reads_list)
+        
+        identity = "true_positive" if has_tp_read else "false_positive"
+        
+        nova_indices.append(original_idx)
+        identities.append(identity)
+    
+    # Filter dataframe to nova variants and add identity column
+    nova_df = df.loc[nova_indices].copy()
+    nova_df['identity'] = identities
+    
+    # Save to CSV
+    nova_df.to_csv(output_file, index=False)
+
 def main():
     """Main analysis function."""
     parser = argparse.ArgumentParser(description='Analyze nova VCF results for variant detection performance')
@@ -904,6 +946,11 @@ def main():
     generate_csv_report(json_report, summary_csv)
     print(f"CSV report written to {summary_csv}")
     print(f"Compact CSV report written to {compact_csv}")
+    
+    # Export nova variants with identity
+    nova_variants_csv = output_dir / f"{args.output_prefix}_analyzed_variants.csv"
+    export_nova_variants_csv(df, nova_variants, categories, nova_variants_csv)
+    print(f"Nova variants CSV written to {nova_variants_csv}")
 
 if __name__ == "__main__":
     main()
